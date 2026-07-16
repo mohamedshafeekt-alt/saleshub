@@ -156,3 +156,80 @@ async def test_create_user_when_email_send_fails_still_returns_201(
     )
 
     assert response.status_code == 201
+
+
+async def test_create_user_missing_role_defaults_to_admin_returns_201(
+    client: AsyncClient, make_user, auth_headers, fake_email_sender
+):
+    admin = await make_user(email="admin-default-role@example.com", role=UserRole.ADMIN)
+    headers = auth_headers(admin)
+
+    response = await client.post(
+        USERS_URL,
+        json={"email": "no-role-given@example.com", "first_name": "Some Name"},
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    assert response.json()["role"] == "admin"
+
+
+async def test_list_users_as_sales_rep_returns_200_with_all_users(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-lister@example.com", role=UserRole.SALES_REP)
+    other_rep = await make_user(email="other-rep@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(USERS_URL, headers=headers)
+
+    assert response.status_code == 200
+    emails = {u["email"] for u in response.json()}
+    assert {rep.email, other_rep.email} <= emails
+
+
+async def test_list_users_includes_inactive_users(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-sees-inactive@example.com", role=UserRole.SALES_REP)
+    inactive = await make_user(
+        email="inactive-user@example.com", role=UserRole.SALES_REP, is_active=False
+    )
+    headers = auth_headers(rep)
+
+    response = await client.get(USERS_URL, headers=headers)
+
+    assert response.status_code == 200
+    by_email = {u["email"]: u for u in response.json()}
+    assert by_email[inactive.email]["is_active"] is False
+
+
+async def test_list_users_as_sales_manager_returns_200(client: AsyncClient, make_user, auth_headers):
+    manager = await make_user(email="manager-lister@example.com", role=UserRole.SALES_MANAGER)
+    headers = auth_headers(manager)
+
+    response = await client.get(USERS_URL, headers=headers)
+
+    assert response.status_code == 200
+
+
+async def test_list_users_as_admin_returns_200(client: AsyncClient, make_user, auth_headers):
+    admin = await make_user(email="admin-lister@example.com", role=UserRole.ADMIN)
+    headers = auth_headers(admin)
+
+    response = await client.get(USERS_URL, headers=headers)
+
+    assert response.status_code == 200
+
+
+async def test_list_users_as_delivery_sme_returns_403(client: AsyncClient, make_user, auth_headers):
+    sme = await make_user(email="sme-blocked-list@example.com", role=UserRole.DELIVERY_SME)
+    headers = auth_headers(sme)
+
+    response = await client.get(USERS_URL, headers=headers)
+
+    assert response.status_code == 403
+
+
+async def test_list_users_no_auth_header_returns_401(client: AsyncClient):
+    response = await client.get(USERS_URL)
+
+    assert response.status_code == 401

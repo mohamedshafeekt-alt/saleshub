@@ -6,7 +6,7 @@ from sqlalchemy import Enum, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
-from app.models.enums import LeadSource, LeadTier
+from app.models.enums import LeadSource, LeadStatus, LeadTier
 
 __all__ = ["Lead"]
 
@@ -27,10 +27,17 @@ class Lead(Base):
         Enum(LeadSource, name="lead_source", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
         nullable=False,
     )
-    tier: Mapped[LeadTier] = mapped_column(
+    tier: Mapped[LeadTier | None] = mapped_column(
         Enum(LeadTier, name="lead_tier", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
-        nullable=False,
+        nullable=True,
     )
-    owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    status: Mapped[LeadStatus] = mapped_column(
+        Enum(LeadStatus, name="lead_status", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
+        nullable=False,
+        default=LeadStatus.NOT_CONTACTED,
+        server_default="not_contacted",
+    )
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     next_follow_up_date: Mapped[date | None] = mapped_column(nullable=True)
     follow_up_note: Mapped[str | None] = mapped_column(nullable=True)
+    is_converted: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")

@@ -110,7 +110,7 @@ async def make_lead(db_session: AsyncSession):
     from app.models.lead import Lead
 
     async def _make_lead(
-        owner_id: int,
+        owner_id: int | None = None,
         email: str = "lead@example.com",
         first_name: str = "Leadfirst",
         last_name: str | None = "Leadlast",
@@ -138,6 +138,79 @@ async def make_lead(db_session: AsyncSession):
 
 
 @pytest_asyncio.fixture
+async def make_account(db_session: AsyncSession):
+    """Factory fixture: await make_account(owner_id=..., company=..., ...) -> Account.
+
+    Constructs the ORM Account directly (bypassing create_account/AccountCreate)
+    so service/API tests can set up fixture data without going through the
+    thing under test. Mirrors make_lead's style.
+    """
+
+    from app.models.account import Account
+    from app.models.enums import LeadTier
+
+    async def _make_account(
+        owner_id: int,
+        company: str = "Acme Corp",
+        domain: str | None = None,
+        tier: LeadTier = LeadTier.GOLD,
+        source_lead_id: int | None = None,
+        **kwargs,
+    ):
+        account = Account(
+            company=company,
+            domain=domain,
+            tier=tier,
+            owner_id=owner_id,
+            source_lead_id=source_lead_id,
+            **kwargs,
+        )
+        db_session.add(account)
+        await db_session.flush()
+        await db_session.commit()
+        return account
+
+    return _make_account
+
+
+@pytest_asyncio.fixture
+async def make_contact(db_session: AsyncSession):
+    """Factory fixture: await make_contact(account_id=..., first_name=..., ...) -> Contact.
+
+    Constructs the ORM Contact directly (bypassing create_contact/ContactCreate)
+    so service/API tests can set up fixture data without going through the
+    thing under test. Mirrors make_account's style.
+    """
+
+    from app.models.contact import Contact
+
+    async def _make_contact(
+        account_id: int,
+        first_name: str = "Contactfirst",
+        last_name: str | None = "Contactlast",
+        email: str | None = None,
+        phone: str | None = None,
+        job_title: str | None = None,
+        **kwargs,
+    ):
+        contact = Contact(
+            first_name=first_name,
+            last_name=last_name,
+            email=email,
+            phone=phone,
+            job_title=job_title,
+            account_id=account_id,
+            **kwargs,
+        )
+        db_session.add(contact)
+        await db_session.flush()
+        await db_session.commit()
+        return contact
+
+    return _make_contact
+
+
+@pytest_asyncio.fixture
 async def auth_headers():
     """Factory fixture: auth_headers(user) -> {"Authorization": "Bearer <token>"}."""
 
@@ -153,3 +226,39 @@ async def auth_headers():
 @pytest.fixture
 def anyio_backend() -> str:
     return "asyncio"
+
+
+@pytest_asyncio.fixture
+async def make_deal(db_session: AsyncSession):
+    """Factory fixture: await make_deal(account_id=..., owner_id=..., ...) -> Deal.
+
+    Constructs the ORM Deal directly (bypassing create_deal/DealCreate) so
+    service/API tests can set up fixture data without going through the
+    thing under test. Mirrors make_contact's style.
+    """
+
+    from app.models.deal import Deal
+    from app.models.enums import DealStage
+
+    async def _make_deal(
+        account_id: int,
+        owner_id: int,
+        deal_name: str = "Dealname Co Deal",
+        currency: str = "USD",
+        stage: DealStage = DealStage.RECEIVED_REQUIREMENTS,
+        **kwargs,
+    ):
+        deal = Deal(
+            deal_name=deal_name,
+            account_id=account_id,
+            owner_id=owner_id,
+            currency=currency,
+            stage=stage,
+            **kwargs,
+        )
+        db_session.add(deal)
+        await db_session.flush()
+        await db_session.commit()
+        return deal
+
+    return _make_deal

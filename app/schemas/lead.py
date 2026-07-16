@@ -4,7 +4,7 @@ from datetime import date
 
 from pydantic import BaseModel, ConfigDict, EmailStr
 
-from app.models.enums import LeadSource, LeadTier
+from app.models.enums import LeadSource, LeadStatus, LeadTier
 
 
 class LeadCreate(BaseModel):
@@ -17,8 +17,9 @@ class LeadCreate(BaseModel):
     phone: str | None = None
     linkedin_url: str | None = None
     source: LeadSource
-    tier: LeadTier
-    owner_id: int
+    tier: LeadTier | None = None
+    status: LeadStatus = LeadStatus.NOT_CONTACTED
+    owner_id: int | None = None
     next_follow_up_date: date | None = None
     follow_up_note: str | None = None
 
@@ -34,6 +35,7 @@ class LeadUpdate(BaseModel):
     linkedin_url: str | None = None
     source: LeadSource | None = None
     tier: LeadTier | None = None
+    status: LeadStatus | None = None
     owner_id: int | None = None
     next_follow_up_date: date | None = None
     follow_up_note: str | None = None
@@ -52,7 +54,14 @@ class LeadRead(BaseModel):
     phone: str | None
     linkedin_url: str | None
     source: LeadSource
-    tier: LeadTier
-    owner_id: int
+    tier: LeadTier | None
+    status: LeadStatus
+    owner_id: int | None
     next_follow_up_date: date | None
     follow_up_note: str | None
+    is_converted: bool
+
+
+class LeadConvertRequest(BaseModel):
+    tier: LeadTier | None = None
+    owner_id: int | None = None

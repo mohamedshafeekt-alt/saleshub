@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import LeadSource, LeadTier
+from app.models.enums import LeadSource, LeadStatus, LeadTier
 from app.models.user import User, UserRole
 
 
@@ -133,6 +133,45 @@ async def test_company_is_required(db_session: AsyncSession):
     )
     with pytest.raises(IntegrityError):
         await db_session.flush()
+
+
+async def test_lead_tier_and_owner_id_are_nullable(db_session: AsyncSession):
+    from app.models.lead import Lead
+
+    lead = Lead(
+        first_name="No",
+        company="Untiered Co",
+        email="untiered-unassigned@example.com",
+        source=LeadSource.WEBSITE,
+        tier=None,
+        owner_id=None,
+    )
+    db_session.add(lead)
+    await db_session.flush()
+    await db_session.refresh(lead)
+
+    assert lead.tier is None
+    assert lead.owner_id is None
+
+
+async def test_lead_status_defaults_to_not_contacted(db_session: AsyncSession):
+    from app.models.lead import Lead
+
+    owner = await _make_owner(db_session, email="owner-status-default@example.com")
+
+    lead = Lead(
+        first_name="No",
+        company="Status Default Co",
+        email="status-default-model@example.com",
+        source=LeadSource.WEBSITE,
+        tier=LeadTier.SILVER,
+        owner_id=owner.id,
+    )
+    db_session.add(lead)
+    await db_session.flush()
+    await db_session.refresh(lead)
+
+    assert lead.status == LeadStatus.NOT_CONTACTED
 
 
 async def test_source_is_required(db_session: AsyncSession):

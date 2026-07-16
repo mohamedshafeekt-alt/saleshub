@@ -92,17 +92,44 @@ async def test_create_lead_bad_owner_id_raises_integrity_error_not_duplicate_ema
         await create_lead(db_session, data)
 
 
-async def test_list_leads_sales_rep_only_sees_own_leads_even_with_owner_id_param(
+async def test_list_leads_sales_rep_owner_id_param_does_not_leak_other_reps_leads(
     db_session: AsyncSession, make_lead
 ):
+    # An explicit owner_id filter ANDs on top of the Sales Rep's own-or-unassigned
+    # base scope, so asking for another rep's owner_id yields nothing -- it does
+    # NOT fall back to "just show my own leads".
     rep_a = await _make_user(db_session, "rep-a@example.com", UserRole.SALES_REP)
     rep_b = await _make_user(db_session, "rep-b@example.com", UserRole.SALES_REP)
-    own_lead = await make_lead(owner_id=rep_a.id, email="own-lead@example.com")
+    await make_lead(owner_id=rep_a.id, email="own-lead@example.com")
     await make_lead(owner_id=rep_b.id, email="other-lead@example.com")
 
     results = await list_leads(db_session, requester=rep_a, owner_id=rep_b.id)
 
-    assert [lead.id for lead in results] == [own_lead.id]
+    assert results == []
+
+
+async def test_list_leads_sales_rep_sees_unassigned_leads(db_session: AsyncSession, make_lead):
+    rep_a = await _make_user(db_session, "rep-unassigned-a@example.com", UserRole.SALES_REP)
+    rep_b = await _make_user(db_session, "rep-unassigned-b@example.com", UserRole.SALES_REP)
+    unassigned = await make_lead(owner_id=None, email="unassigned-svc@example.com")
+    await make_lead(owner_id=rep_b.id, email="other-svc@example.com")
+
+    results = await list_leads(db_session, requester=rep_a)
+
+    ids = {lead.id for lead in results}
+    assert unassigned.id in ids
+
+
+async def test_list_leads_delivery_sme_sees_own_and_unassigned_leads(db_session: AsyncSession, make_lead):
+    sme = await _make_user(db_session, "sme-svc@example.com", UserRole.DELIVERY_SME)
+    other_rep = await _make_user(db_session, "rep-svc-other@example.com", UserRole.SALES_REP)
+    unassigned = await make_lead(owner_id=None, email="unassigned-sme-svc@example.com")
+    await make_lead(owner_id=other_rep.id, email="other-owned-sme-svc@example.com")
+
+    results = await list_leads(db_session, requester=sme)
+
+    ids = {lead.id for lead in results}
+    assert unassigned.id in ids
 
 
 async def test_list_leads_manager_sees_all_when_no_owner_id_given(db_session: AsyncSession, make_lead):

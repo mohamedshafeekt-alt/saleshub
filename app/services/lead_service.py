@@ -5,7 +5,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import LeadSource, LeadTier
+from app.models.enums import LeadSource, LeadStatus, LeadTier
 from app.models.lead import Lead
 from app.models.user import User, UserRole
 from app.schemas.lead import LeadCreate, LeadUpdate
@@ -51,16 +51,17 @@ async def list_leads(
     owner_id: int | None = None,
     source: LeadSource | None = None,
     tier: LeadTier | None = None,
+    status: LeadStatus | None = None,
     search: str | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> list[Lead]:
-    if requester.role == UserRole.SALES_REP:
-        owner_id = requester.id
-
     query = select(Lead)
     if search is not None:
-        query = query.join(User, Lead.owner_id == User.id)
+        query = query.join(User, Lead.owner_id == User.id, isouter=True)
+
+    if requester.role in (UserRole.SALES_REP, UserRole.DELIVERY_SME):
+        query = query.where(or_(Lead.owner_id == requester.id, Lead.owner_id.is_(None)))
 
     if owner_id is not None:
         query = query.where(Lead.owner_id == owner_id)
@@ -68,6 +69,8 @@ async def list_leads(
         query = query.where(Lead.source == source)
     if tier is not None:
         query = query.where(Lead.tier == tier)
+    if status is not None:
+        query = query.where(Lead.status == status)
     if search is not None:
         pattern = f"%{search}%"
         query = query.where(
@@ -88,7 +91,11 @@ async def _get_lead_or_raise(db: AsyncSession, lead_id: int, requester: User) ->
     lead = result.scalar_one_or_none()
     if lead is None:
         raise LeadNotFoundError(f"Lead not found: {lead_id}")
-    if requester.role == UserRole.SALES_REP and lead.owner_id != requester.id:
+    if (
+        requester.role in (UserRole.SALES_REP, UserRole.DELIVERY_SME)
+        and lead.owner_id is not None
+        and lead.owner_id != requester.id
+    ):
         raise LeadAccessForbiddenError(f"Not permitted to access lead: {lead_id}")
     return lead
 

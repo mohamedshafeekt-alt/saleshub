@@ -24,3 +24,23 @@ class LeadTier(str, enum.Enum):
     GOLD = "gold"
     SILVER = "silver"
     BRONZE = "bronze"
+
+
+class LeadStatus(str, enum.Enum):
+    NOT_CONTACTED = "not_contacted"
+    ATTEMPTED_TO_CONTACT = "attempted_to_contact"
+    CONTACTED = "contacted"
+    CONTACT_IN_FUTURE = "contact_in_future"
+    JUNK_LEAD = "junk_lead"
+    LOST_LEAD = "lost_lead"
+
+
+class DealStage(str, enum.Enum):
+    RECEIVED_REQUIREMENTS = "received_requirements"
+    QUALIFIED_TO_BUY = "qualified_to_buy"
+    EVALUATION = "evaluation"
+    PROPOSALS = "proposals"
+    CONTRACTS = "contracts"
+    CLOSED_WON = "closed_won"
+    CLOSED_LOST = "closed_lost"
+    COLD_DEALS = "cold_deals"
