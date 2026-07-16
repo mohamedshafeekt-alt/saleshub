@@ -6,7 +6,7 @@ import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import LeadSource, LeadStatus, LeadTier
+from app.models.enums import LeadSource, LeadStatus
 from app.models.user import User, UserRole
 
 
@@ -32,7 +32,6 @@ async def test_lead_persists_with_all_fields_and_inherits_timestamps(db_session:
         phone="+1-555-0100",
         linkedin_url="https://linkedin.com/in/janedoe",
         source=LeadSource.REFERRAL,
-        tier=LeadTier.DIAMOND,
         owner_id=owner.id,
         next_follow_up_date=date(2026, 8, 1),
         follow_up_note="Call back after Q3 budget review",
@@ -51,7 +50,6 @@ async def test_lead_persists_with_all_fields_and_inherits_timestamps(db_session:
     assert lead.phone == "+1-555-0100"
     assert lead.linkedin_url == "https://linkedin.com/in/janedoe"
     assert lead.source == LeadSource.REFERRAL
-    assert lead.tier == LeadTier.DIAMOND
     assert lead.owner_id == owner.id
     assert lead.next_follow_up_date == date(2026, 8, 1)
     assert lead.follow_up_note == "Call back after Q3 budget review"
@@ -69,7 +67,6 @@ async def test_lead_persists_with_only_required_fields(db_session: AsyncSession)
         company="Minimal Co",
         email="min@minimal.co",
         source=LeadSource.WEBSITE,
-        tier=LeadTier.BRONZE,
         owner_id=owner.id,
     )
     db_session.add(lead)
@@ -96,7 +93,6 @@ async def test_duplicate_email_violates_unique_constraint(db_session: AsyncSessi
             company="Co A",
             email="dupe-lead@example.com",
             source=LeadSource.WEBSITE,
-            tier=LeadTier.SILVER,
             owner_id=owner.id,
         )
     )
@@ -108,7 +104,6 @@ async def test_duplicate_email_violates_unique_constraint(db_session: AsyncSessi
             company="Co B",
             email="dupe-lead@example.com",
             source=LeadSource.COLD_CALL,
-            tier=LeadTier.GOLD,
             owner_id=owner.id,
         )
     )
@@ -127,7 +122,6 @@ async def test_company_is_required(db_session: AsyncSession):
             company=None,
             email="no-company@example.com",
             source=LeadSource.WEBSITE,
-            tier=LeadTier.SILVER,
             owner_id=owner.id,
         )
     )
@@ -135,22 +129,20 @@ async def test_company_is_required(db_session: AsyncSession):
         await db_session.flush()
 
 
-async def test_lead_tier_and_owner_id_are_nullable(db_session: AsyncSession):
+async def test_lead_owner_id_is_nullable(db_session: AsyncSession):
     from app.models.lead import Lead
 
     lead = Lead(
         first_name="No",
-        company="Untiered Co",
+        company="Unassigned Co",
         email="untiered-unassigned@example.com",
         source=LeadSource.WEBSITE,
-        tier=None,
         owner_id=None,
     )
     db_session.add(lead)
     await db_session.flush()
     await db_session.refresh(lead)
 
-    assert lead.tier is None
     assert lead.owner_id is None
 
 
@@ -164,7 +156,6 @@ async def test_lead_status_defaults_to_not_contacted(db_session: AsyncSession):
         company="Status Default Co",
         email="status-default-model@example.com",
         source=LeadSource.WEBSITE,
-        tier=LeadTier.SILVER,
         owner_id=owner.id,
     )
     db_session.add(lead)
@@ -185,7 +176,6 @@ async def test_source_is_required(db_session: AsyncSession):
             company="No Source Co",
             email="no-source@example.com",
             source=None,
-            tier=LeadTier.SILVER,
             owner_id=owner.id,
         )
     )

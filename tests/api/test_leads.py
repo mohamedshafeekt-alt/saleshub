@@ -1,17 +1,41 @@
 """HTTP-level contract for /api/v1/leads.
 
-Covers: 201 create as each allowed role, 409 duplicate email, 422 missing
-required field, 401 no auth, 403 for Delivery SME (list + create) and for a
-non-owning Sales Rep (get/update/delete), 200 list scoped by role and by each
-filter (owner_id/source/tier/search), 404 for a missing lead, 200 partial
-PATCH, 204 DELETE.
+Covers: 201 create / 200 update as each allowed role (single POST route,
+dispatched on whether `id` is present in the body), 409 duplicate email, 422
+missing required field, 401 no auth, 403 for Delivery SME (list + create) and
+for a non-owning Sales Rep (get/update/delete), 200 list scoped by role and by
+each filter (owner_id/source/search), 404 for a missing lead, 204 DELETE.
 """
 
+import pytest_asyncio
 from httpx import AsyncClient
 
 from app.models.user import UserRole
 
 LEADS_URL = "/api/v1/leads"
+
+
+class FakeEmailSender:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def send(self, to: str, subject: str, body: str) -> None:
+        self.calls.append({"to": to, "subject": subject, "body": body})
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def fake_email_sender(client: AsyncClient):
+    """Every test here creates leads over HTTP, which now sends an admin
+    notification email; override with a fake so none of them touch real SMTP.
+    Autouse (rather than an explicit param on every test) since this applies
+    uniformly across the whole file."""
+    from app.core.deps import get_email_sender
+    from app.main import app
+
+    fake = FakeEmailSender()
+    app.dependency_overrides[get_email_sender] = lambda: fake
+    yield fake
+    app.dependency_overrides.pop(get_email_sender, None)
 
 
 def _lead_payload(**overrides) -> dict:
@@ -21,7 +45,6 @@ def _lead_payload(**overrides) -> dict:
         "company": "Acme Corp",
         "email": "jane.doe@acme.com",
         "source": "website",
-        "tier": "gold",
         "owner_id": overrides.pop("owner_id"),
     }
     payload.update(overrides)
@@ -41,7 +64,6 @@ async def test_create_lead_as_sales_rep_returns_201(client: AsyncClient, make_us
     assert body["email"] == "created-by-rep@example.com"
     assert body["company"] == "Acme Corp"
     assert body["source"] == "website"
-    assert body["tier"] == "gold"
     assert body["owner_id"] == rep.id
     assert "id" in body
 
@@ -110,6 +132,40 @@ async def test_create_lead_bad_source_enum_value_returns_422(client: AsyncClient
     assert response.status_code == 422
 
 
+async def test_create_lead_empty_extra_contact_returns_422(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-empty-contact@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        LEADS_URL,
+        json=_lead_payload(
+            owner_id=rep.id, email="empty-contact@example.com", contacts=[{"email": None, "phone": None}]
+        ),
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_create_lead_malformed_extra_contact_email_returns_422(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-bad-contact-email@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        LEADS_URL,
+        json=_lead_payload(
+            owner_id=rep.id,
+            email="bad-contact-email@example.com",
+            contacts=[{"email": "not-an-email"}],
+        ),
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+
 async def test_create_lead_no_auth_header_returns_401(client: AsyncClient, make_user):
     rep = await make_user(email="rep-no-auth@example.com", role=UserRole.SALES_REP)
 
@@ -127,6 +183,21 @@ async def test_create_lead_as_delivery_sme_returns_201(client: AsyncClient, make
     )
 
     assert response.status_code == 201
+
+
+async def test_create_lead_notifies_admin_by_email(
+    client: AsyncClient, make_user, auth_headers, fake_email_sender
+):
+    admin = await make_user(email="admin-gets-notified@example.com", role=UserRole.ADMIN)
+    rep = await make_user(email="rep-triggers-notify@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        LEADS_URL, json=_lead_payload(owner_id=rep.id, email="notify-me@example.com"), headers=headers
+    )
+
+    assert response.status_code == 201
+    assert any(call["to"] == admin.email for call in fake_email_sender.calls)
 
 
 async def test_list_leads_as_delivery_sme_returns_200(client: AsyncClient, make_user, auth_headers):
@@ -150,7 +221,7 @@ async def test_list_leads_sales_rep_sees_unassigned_lead(
     response = await client.get(LEADS_URL, headers=headers)
 
     assert response.status_code == 200
-    ids = {lead["id"] for lead in response.json()}
+    ids = {lead["id"] for lead in response.json()["items"]}
     assert unassigned.id in ids
 
 
@@ -192,7 +263,7 @@ async def test_list_leads_delivery_sme_sees_unassigned_lead(
     response = await client.get(LEADS_URL, headers=headers)
 
     assert response.status_code == 200
-    ids = {lead["id"] for lead in response.json()}
+    ids = {lead["id"] for lead in response.json()["items"]}
     assert unassigned.id in ids
 
 
@@ -236,7 +307,7 @@ async def test_list_leads_sales_rep_owner_id_param_does_not_leak_other_reps_lead
     response = await client.get(LEADS_URL, params={"owner_id": rep_b.id}, headers=headers)
 
     assert response.status_code == 200
-    assert response.json() == []
+    assert response.json()["items"] == []
 
 
 async def test_list_leads_sales_rep_only_sees_own_leads(
@@ -251,7 +322,7 @@ async def test_list_leads_sales_rep_only_sees_own_leads(
     response = await client.get(LEADS_URL, headers=headers)
 
     assert response.status_code == 200
-    ids = [lead["id"] for lead in response.json()]
+    ids = [lead["id"] for lead in response.json()["items"]]
     assert own_lead.id in ids
     assert other_lead.id not in ids
 
@@ -267,8 +338,26 @@ async def test_list_leads_manager_sees_all_leads(client: AsyncClient, make_user,
     response = await client.get(LEADS_URL, headers=headers)
 
     assert response.status_code == 200
-    ids = {lead["id"] for lead in response.json()}
+    ids = {lead["id"] for lead in response.json()["items"]}
     assert {lead_a.id, lead_b.id} <= ids
+
+
+async def test_list_leads_total_reflects_full_filtered_count_not_page_size(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    rep = await make_user(email="rep-total-count@example.com", role=UserRole.SALES_REP)
+    for i in range(3):
+        await make_lead(owner_id=rep.id, email=f"total-count-{i}@example.com")
+    headers = auth_headers(rep)
+
+    response = await client.get(LEADS_URL, params={"limit": 2, "offset": 0}, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 3
+    assert body["limit"] == 2
+    assert body["offset"] == 0
 
 
 async def test_list_leads_filters_by_owner_id(client: AsyncClient, make_user, auth_headers, make_lead):
@@ -282,7 +371,7 @@ async def test_list_leads_filters_by_owner_id(client: AsyncClient, make_user, au
     response = await client.get(LEADS_URL, params={"owner_id": rep_a.id}, headers=headers)
 
     assert response.status_code == 200
-    assert [lead["id"] for lead in response.json()] == [lead_a.id]
+    assert [lead["id"] for lead in response.json()["items"]] == [lead_a.id]
 
 
 async def test_list_leads_filters_by_source(client: AsyncClient, make_user, auth_headers, make_lead):
@@ -294,19 +383,7 @@ async def test_list_leads_filters_by_source(client: AsyncClient, make_user, auth
     response = await client.get(LEADS_URL, params={"source": "website"}, headers=headers)
 
     assert response.status_code == 200
-    assert [lead["id"] for lead in response.json()] == [website_lead.id]
-
-
-async def test_list_leads_filters_by_tier(client: AsyncClient, make_user, auth_headers, make_lead):
-    rep = await make_user(email="rep-filter-tier@example.com", role=UserRole.SALES_REP)
-    gold_lead = await make_lead(owner_id=rep.id, email="filter-tier-gold@example.com", tier="gold")
-    await make_lead(owner_id=rep.id, email="filter-tier-bronze@example.com", tier="bronze")
-    headers = auth_headers(rep)
-
-    response = await client.get(LEADS_URL, params={"tier": "gold"}, headers=headers)
-
-    assert response.status_code == 200
-    assert [lead["id"] for lead in response.json()] == [gold_lead.id]
+    assert [lead["id"] for lead in response.json()["items"]] == [website_lead.id]
 
 
 async def test_list_leads_filters_by_search(client: AsyncClient, make_user, auth_headers, make_lead):
@@ -320,7 +397,7 @@ async def test_list_leads_filters_by_search(client: AsyncClient, make_user, auth
     response = await client.get(LEADS_URL, params={"search": "searchable"}, headers=headers)
 
     assert response.status_code == 200
-    assert [lead["id"] for lead in response.json()] == [match.id]
+    assert [lead["id"] for lead in response.json()["items"]] == [match.id]
 
 
 async def test_list_leads_search_still_matches_unassigned_leads(
@@ -335,7 +412,7 @@ async def test_list_leads_search_still_matches_unassigned_leads(
     response = await client.get(LEADS_URL, params={"search": "searchable unassigned"}, headers=headers)
 
     assert response.status_code == 200
-    assert [lead["id"] for lead in response.json()] == [unassigned_match.id]
+    assert [lead["id"] for lead in response.json()["items"]] == [unassigned_match.id]
 
 
 async def test_get_lead_returns_404_for_nonexistent_id(client: AsyncClient, make_user, auth_headers):
@@ -373,12 +450,94 @@ async def test_get_lead_returns_200_for_owning_sales_rep(
     assert response.json()["id"] == lead.id
 
 
+async def test_list_leads_returns_owner_name_and_updated_at(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-owner-name@example.com", role=UserRole.SALES_REP, first_name="Karthick")
+    await make_lead(owner_id=owner.id, email="owner-name-list-lead@example.com")
+    headers = auth_headers(owner)
+
+    response = await client.get(LEADS_URL, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()["items"][0]
+    assert body["owner_name"] == "Karthick"
+    assert "updated_at" in body
+
+
+async def test_get_lead_detail_includes_contacts_activities_and_owner_name(
+    client: AsyncClient, make_user, auth_headers
+):
+    owner = await make_user(email="rep-detail@example.com", role=UserRole.SALES_REP, first_name="Vishnu")
+    headers = auth_headers(owner)
+
+    create_response = await client.post(
+        LEADS_URL,
+        json=_lead_payload(
+            owner_id=owner.id,
+            email="detail-lead-created@example.com",
+            phone="+1-555-0200",
+            contacts=[{"email": "extra@example.com"}],
+        ),
+        headers=headers,
+    )
+    created_lead_id = create_response.json()["id"]
+
+    await client.post(
+        f"{LEADS_URL}/{created_lead_id}/activities",
+        json={"type": "call", "note": "Discussed pricing"},
+        headers=headers,
+    )
+
+    response = await client.get(f"{LEADS_URL}/{created_lead_id}", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["owner_name"] == "Vishnu"
+    assert "updated_at" in body
+
+    contact_emails = {contact["email"] for contact in body["contacts"]}
+    assert contact_emails == {"detail-lead-created@example.com", "extra@example.com"}
+
+    assert body["activity_count"] == 1
+    activity = body["activities"][0]
+    assert activity["type"] == "call"
+    assert activity["note"] == "Discussed pricing"
+    assert activity["created_by_name"] == "Vishnu"
+
+
+async def test_get_lead_detail_activities_are_in_insertion_order(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    # Ordered by id, not created_at: created_at is now()-based (fixed for the
+    # whole transaction), so activities logged back-to-back here would tie
+    # and could sort arbitrarily if ordering relied on it instead.
+    owner = await make_user(email="rep-activity-order@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-order-lead@example.com")
+    headers = auth_headers(owner)
+
+    await client.post(
+        f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "first"}, headers=headers
+    )
+    await client.post(
+        f"{LEADS_URL}/{lead.id}/activities", json={"type": "call", "note": "second"}, headers=headers
+    )
+
+    response = await client.get(f"{LEADS_URL}/{lead.id}", headers=headers)
+
+    assert response.status_code == 200
+    notes = [activity["note"] for activity in response.json()["activities"]]
+    assert notes == ["first", "second"]
+
+
 async def test_update_lead_partial_patch_returns_200(client: AsyncClient, make_user, auth_headers, make_lead):
     owner = await make_user(email="rep-patch@example.com", role=UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="patch-me@example.com", company="Old Co")
     headers = auth_headers(owner)
 
-    response = await client.patch(f"{LEADS_URL}/{lead.id}", json={"company": "New Co"}, headers=headers)
+    response = await client.post(
+        LEADS_URL, json={"id": lead.id, "company": "New Co"}, headers=headers
+    )
 
     assert response.status_code == 200
     body = response.json()
@@ -390,7 +549,7 @@ async def test_update_lead_returns_404_for_nonexistent_id(client: AsyncClient, m
     rep = await make_user(email="rep-patch-404@example.com", role=UserRole.SALES_REP)
     headers = auth_headers(rep)
 
-    response = await client.patch(f"{LEADS_URL}/999999", json={"company": "New Co"}, headers=headers)
+    response = await client.post(LEADS_URL, json={"id": 999999, "company": "New Co"}, headers=headers)
 
     assert response.status_code == 404
 
@@ -403,7 +562,9 @@ async def test_update_lead_returns_403_for_non_owning_sales_rep(
     lead = await make_lead(owner_id=owner.id, email="patch-forbidden@example.com")
     headers = auth_headers(other_rep)
 
-    response = await client.patch(f"{LEADS_URL}/{lead.id}", json={"company": "New Co"}, headers=headers)
+    response = await client.post(
+        LEADS_URL, json={"id": lead.id, "company": "New Co"}, headers=headers
+    )
 
     assert response.status_code == 403
 
@@ -416,11 +577,44 @@ async def test_update_lead_duplicate_email_returns_409(
     lead_to_update = await make_lead(owner_id=owner.id, email="patch-dup-original@example.com")
     headers = auth_headers(owner)
 
-    response = await client.patch(
-        f"{LEADS_URL}/{lead_to_update.id}", json={"email": "patch-dup-taken@example.com"}, headers=headers
+    response = await client.post(
+        LEADS_URL,
+        json={"id": lead_to_update.id, "email": "patch-dup-taken@example.com"},
+        headers=headers,
     )
 
     assert response.status_code == 409
+
+
+async def test_upsert_lead_dispatches_to_create_when_id_omitted(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-upsert-create@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        LEADS_URL, json=_lead_payload(owner_id=rep.id, email="upsert-create@example.com"), headers=headers
+    )
+
+    assert response.status_code == 201
+    assert "id" in response.json()
+
+
+async def test_upsert_lead_dispatches_to_update_when_id_present(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-upsert-update@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="upsert-update@example.com", company="Old Co")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        LEADS_URL, json={"id": lead.id, "company": "Updated Co"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == lead.id
+    assert body["company"] == "Updated Co"
 
 
 async def test_delete_lead_returns_204(client: AsyncClient, make_user, auth_headers, make_lead):
@@ -473,7 +667,9 @@ async def test_convert_lead_to_account_returns_201_with_account_body(
     )
     headers = auth_headers(owner)
 
-    response = await client.post(f"{LEADS_URL}/{lead.id}/convert", headers=headers)
+    response = await client.post(
+        f"{LEADS_URL}/{lead.id}/convert", json={"tier": "gold"}, headers=headers
+    )
 
     assert response.status_code == 201
     body = response.json()
@@ -514,10 +710,10 @@ async def test_convert_lead_to_account_returns_409_for_already_converted_lead(
     owner = await make_user(email="rep-convert-twice@example.com", role=UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="convert-twice-api@example.com")
     headers = auth_headers(owner)
-    first = await client.post(f"{LEADS_URL}/{lead.id}/convert", headers=headers)
+    first = await client.post(f"{LEADS_URL}/{lead.id}/convert", json={"tier": "gold"}, headers=headers)
     assert first.status_code == 201
 
-    response = await client.post(f"{LEADS_URL}/{lead.id}/convert", headers=headers)
+    response = await client.post(f"{LEADS_URL}/{lead.id}/convert", json={"tier": "gold"}, headers=headers)
 
     assert response.status_code == 409
 
@@ -529,7 +725,9 @@ async def test_convert_lead_to_account_sets_is_converted_on_the_lead(
     lead = await make_lead(owner_id=owner.id, email="convert-flag-api@example.com")
     headers = auth_headers(owner)
 
-    convert_response = await client.post(f"{LEADS_URL}/{lead.id}/convert", headers=headers)
+    convert_response = await client.post(
+        f"{LEADS_URL}/{lead.id}/convert", json={"tier": "gold"}, headers=headers
+    )
     assert convert_response.status_code == 201
 
     get_response = await client.get(f"{LEADS_URL}/{lead.id}", headers=headers)
@@ -542,9 +740,7 @@ async def test_convert_lead_missing_tier_and_owner_returns_400(
     client: AsyncClient, make_user, auth_headers, make_lead
 ):
     manager = await make_user(email="manager-convert-missing@example.com", role=UserRole.SALES_MANAGER)
-    lead = await make_lead(
-        owner_id=None, email="convert-missing-fields@example.com", tier=None
-    )
+    lead = await make_lead(owner_id=None, email="convert-missing-fields@example.com")
     headers = auth_headers(manager)
 
     response = await client.post(f"{LEADS_URL}/{lead.id}/convert", headers=headers)
@@ -557,9 +753,7 @@ async def test_convert_lead_missing_tier_and_owner_with_override_returns_201(
 ):
     manager = await make_user(email="manager-convert-override@example.com", role=UserRole.SALES_MANAGER)
     new_owner = await make_user(email="rep-convert-override-owner@example.com", role=UserRole.SALES_REP)
-    lead = await make_lead(
-        owner_id=None, email="convert-override-fields@example.com", tier=None
-    )
+    lead = await make_lead(owner_id=None, email="convert-override-fields@example.com")
     headers = auth_headers(manager)
 
     response = await client.post(
@@ -574,12 +768,10 @@ async def test_convert_lead_missing_tier_and_owner_with_override_returns_201(
     assert body["owner_id"] == new_owner.id
 
 
-# --- Lead.tier / Lead.owner_id optional --------------------------------------
+# --- Lead.owner_id optional ---------------------------------------------------
 
 
-async def test_create_lead_without_tier_and_owner_id_returns_201(
-    client: AsyncClient, make_user, auth_headers
-):
+async def test_create_lead_without_owner_id_returns_201(client: AsyncClient, make_user, auth_headers):
     manager = await make_user(email="manager-no-tier-owner@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(manager)
     payload = {
@@ -594,7 +786,6 @@ async def test_create_lead_without_tier_and_owner_id_returns_201(
 
     assert response.status_code == 201
     body = response.json()
-    assert body["tier"] is None
     assert body["owner_id"] is None
 
 
@@ -631,13 +822,13 @@ async def test_create_lead_status_settable_explicitly(client: AsyncClient, make_
     assert response.json()["status"] == "contacted"
 
 
-async def test_update_lead_status_via_patch(client: AsyncClient, make_user, auth_headers, make_lead):
+async def test_update_lead_status_via_post(client: AsyncClient, make_user, auth_headers, make_lead):
     owner = await make_user(email="rep-status-patch@example.com", role=UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="status-patch@example.com")
     headers = auth_headers(owner)
 
-    response = await client.patch(
-        f"{LEADS_URL}/{lead.id}", json={"status": "junk_lead"}, headers=headers
+    response = await client.post(
+        LEADS_URL, json={"id": lead.id, "status": "junk_lead"}, headers=headers
     )
 
     assert response.status_code == 200
@@ -654,4 +845,87 @@ async def test_list_leads_filters_by_status(client: AsyncClient, make_user, auth
     response = await client.get(LEADS_URL, params={"status": "junk_lead"}, headers=headers)
 
     assert response.status_code == 200
-    assert [lead["id"] for lead in response.json()] == [junk.id]
+    assert [lead["id"] for lead in response.json()["items"]] == [junk.id]
+
+
+# --- POST /api/v1/leads/{lead_id}/activities ---------------------------------
+
+
+async def test_create_lead_activity_returns_201(client: AsyncClient, make_user, auth_headers, make_lead):
+    owner = await make_user(email="rep-activity-create@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-create-lead@example.com")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        f"{LEADS_URL}/{lead.id}/activities",
+        json={"type": "call", "note": "Discussed pricing"},
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["lead_id"] == lead.id
+    assert body["type"] == "call"
+    assert body["note"] == "Discussed pricing"
+    assert body["created_by"] == owner.id
+    assert "id" in body
+
+
+async def test_create_lead_activity_returns_404_for_nonexistent_lead(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-activity-404@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        f"{LEADS_URL}/999999/activities", json={"type": "note", "note": "x"}, headers=headers
+    )
+
+    assert response.status_code == 404
+
+
+async def test_create_lead_activity_returns_403_for_non_owning_sales_rep(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-owns-activity@example.com", role=UserRole.SALES_REP)
+    other_rep = await make_user(email="rep-not-owner-activity@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-forbidden-api@example.com")
+    headers = auth_headers(other_rep)
+
+    response = await client.post(
+        f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "x"}, headers=headers
+    )
+
+    assert response.status_code == 403
+
+
+async def test_create_lead_activity_bad_type_enum_value_returns_422(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-activity-bad-type@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-bad-type-lead@example.com")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        f"{LEADS_URL}/{lead.id}/activities",
+        json={"type": "not_a_real_type", "note": "x"},
+        headers=headers,
+    )
+
+    assert response.status_code == 422
+
+
+async def test_create_lead_activity_empty_note_returns_422(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-activity-empty-note@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-empty-note-lead@example.com")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        f"{LEADS_URL}/{lead.id}/activities",
+        json={"type": "note", "note": ""},
+        headers=headers,
+    )
+
+    assert response.status_code == 422

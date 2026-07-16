@@ -36,7 +36,13 @@ async def create_user_route(
 @router.get(
     "",
     response_model=list[UserRead],
-    dependencies=[Depends(require_role(UserRole.SALES_REP, UserRole.SALES_MANAGER, UserRole.ADMIN))],
+    dependencies=[
+        Depends(
+            require_role(
+                UserRole.SALES_REP, UserRole.SALES_MANAGER, UserRole.ADMIN, UserRole.DELIVERY_SME
+            )
+        )
+    ],
 )
 async def list_users_route(db: AsyncSession = Depends(get_db)) -> list[UserRead]:
     users = await list_users(db)

@@ -131,6 +131,39 @@ async def test_update_account_can_update_industry_city_description(
     assert body["description"] == "Updated description"
 
 
+async def test_create_account_with_linkedin_url_returns_201(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-create-acc-linkedin@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        ACCOUNTS_URL,
+        json=_account_payload(
+            owner_id=rep.id,
+            company="LinkedIn Co",
+            linkedin_url="https://linkedin.com/company/linkedin-co",
+        ),
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["linkedin_url"] == "https://linkedin.com/company/linkedin-co"
+
+
+async def test_create_account_without_linkedin_url_returns_201_with_null(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-create-acc-no-linkedin@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        ACCOUNTS_URL, json=_account_payload(owner_id=rep.id, company="No LinkedIn Co"), headers=headers
+    )
+
+    assert response.status_code == 201
+    assert response.json()["linkedin_url"] is None
+
+
 async def test_create_account_missing_company_returns_422(client: AsyncClient, make_user, auth_headers):
     rep = await make_user(email="rep-missing-company-acc@example.com", role=UserRole.SALES_REP)
     headers = auth_headers(rep)
@@ -193,7 +226,7 @@ async def test_list_accounts_sales_rep_only_sees_own_accounts(
     response = await client.get(ACCOUNTS_URL, params={"owner_id": rep_b.id}, headers=headers)
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["items"]
     assert [account["id"] for account in body] == [own_account.id]
 
 
@@ -210,7 +243,7 @@ async def test_list_accounts_manager_sees_all_accounts(
     response = await client.get(ACCOUNTS_URL, headers=headers)
 
     assert response.status_code == 200
-    ids = {account["id"] for account in response.json()}
+    ids = {account["id"] for account in response.json()["items"]}
     assert {account_a.id, account_b.id} <= ids
 
 
@@ -225,8 +258,24 @@ async def test_list_accounts_admin_sees_all_accounts(
     response = await client.get(ACCOUNTS_URL, headers=headers)
 
     assert response.status_code == 200
-    ids = {account["id"] for account in response.json()}
+    ids = {account["id"] for account in response.json()["items"]}
     assert account_a.id in ids
+
+
+async def test_list_accounts_total_reflects_full_filtered_count_not_page_size(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    rep = await make_user(email="rep-total-count-acc@example.com", role=UserRole.SALES_REP)
+    for i in range(3):
+        await make_account(owner_id=rep.id, company=f"Total Count Co {i}")
+    headers = auth_headers(rep)
+
+    response = await client.get(ACCOUNTS_URL, params={"limit": 2, "offset": 0}, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 3
 
 
 async def test_list_accounts_filters_by_owner_id(
@@ -242,7 +291,7 @@ async def test_list_accounts_filters_by_owner_id(
     response = await client.get(ACCOUNTS_URL, params={"owner_id": rep_a.id}, headers=headers)
 
     assert response.status_code == 200
-    assert [account["id"] for account in response.json()] == [account_a.id]
+    assert [account["id"] for account in response.json()["items"]] == [account_a.id]
 
 
 async def test_list_accounts_filters_by_tier(client: AsyncClient, make_user, auth_headers, make_account):
@@ -254,7 +303,7 @@ async def test_list_accounts_filters_by_tier(client: AsyncClient, make_user, aut
     response = await client.get(ACCOUNTS_URL, params={"tier": "gold"}, headers=headers)
 
     assert response.status_code == 200
-    assert [account["id"] for account in response.json()] == [gold_account.id]
+    assert [account["id"] for account in response.json()["items"]] == [gold_account.id]
 
 
 async def test_list_accounts_filters_by_search(client: AsyncClient, make_user, auth_headers, make_account):
@@ -266,7 +315,7 @@ async def test_list_accounts_filters_by_search(client: AsyncClient, make_user, a
     response = await client.get(ACCOUNTS_URL, params={"search": "searchable"}, headers=headers)
 
     assert response.status_code == 200
-    assert [account["id"] for account in response.json()] == [match.id]
+    assert [account["id"] for account in response.json()["items"]] == [match.id]
 
 
 async def test_get_account_returns_404_for_nonexistent_id(client: AsyncClient, make_user, auth_headers):
@@ -394,8 +443,27 @@ async def test_list_contacts_for_account_returns_200_with_scoped_contacts(
     response = await client.get(f"{ACCOUNTS_URL}/{account_a.id}/contacts", headers=headers)
 
     assert response.status_code == 200
-    body = response.json()
+    body = response.json()["items"]
     assert [contact["id"] for contact in body] == [contact_a.id]
+
+
+async def test_list_contacts_for_account_total_reflects_full_count_not_page_size(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    owner = await make_user(email="rep-contacts-total@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Contacts Total Co")
+    for i in range(3):
+        await make_contact(account_id=account.id, first_name=f"Contact {i}")
+    headers = auth_headers(owner)
+
+    response = await client.get(
+        f"{ACCOUNTS_URL}/{account.id}/contacts", params={"limit": 2, "offset": 0}, headers=headers
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 3
 
 
 async def test_list_contacts_for_account_returns_404_for_nonexistent_account(

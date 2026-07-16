@@ -16,7 +16,6 @@ _deal_stage_enum = Enum(
 class DealStageHistory(Base):
     __tablename__ = "deal_stage_history"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     deal_id: Mapped[int] = mapped_column(
         ForeignKey("deals.id", ondelete="CASCADE"), nullable=False, index=True
     )

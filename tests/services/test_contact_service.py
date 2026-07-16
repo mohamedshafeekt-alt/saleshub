@@ -114,7 +114,7 @@ async def test_list_contacts_for_account_returns_only_that_accounts_contacts(
     contact_a = await make_contact(account_id=account_a.id, first_name="A Contact")
     await make_contact(account_id=account_b.id, first_name="B Contact")
 
-    results = await list_contacts_for_account(db_session, account_id=account_a.id, requester=owner)
+    results, _total = await list_contacts_for_account(db_session, account_id=account_a.id, requester=owner)
 
     assert [contact.id for contact in results] == [contact_a.id]
 

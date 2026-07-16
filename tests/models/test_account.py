@@ -25,7 +25,6 @@ async def test_account_persists_with_all_fields_and_inherits_timestamps(db_sessi
         company="Acme Corp",
         email="jane.doe@acme.com",
         source=LeadSource.WEBSITE,
-        tier=LeadTier.GOLD,
         owner_id=owner.id,
     )
     db_session.add(source_lead)
@@ -64,6 +63,25 @@ async def test_account_persists_with_only_required_fields(db_session: AsyncSessi
 
     assert account.domain is None
     assert account.source_lead_id is None
+    assert account.linkedin_url is None
+
+
+async def test_account_persists_with_linkedin_url(db_session: AsyncSession):
+    from app.models.account import Account
+
+    owner = await _make_owner(db_session, email="owner6@example.com")
+
+    account = Account(
+        company="LinkedIn Co",
+        tier=LeadTier.GOLD,
+        owner_id=owner.id,
+        linkedin_url="https://linkedin.com/company/linkedin-co",
+    )
+    db_session.add(account)
+    await db_session.flush()
+    await db_session.refresh(account)
+
+    assert account.linkedin_url == "https://linkedin.com/company/linkedin-co"
 
 
 async def test_account_accepts_all_lead_tier_values(db_session: AsyncSession):

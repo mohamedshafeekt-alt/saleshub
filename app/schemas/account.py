@@ -13,6 +13,7 @@ class AccountCreate(BaseModel):
     industry: str | None = None
     city: str | None = None
     description: str | None = None
+    linkedin_url: str | None = None
 
 
 class AccountUpdate(BaseModel):
@@ -23,6 +24,7 @@ class AccountUpdate(BaseModel):
     industry: str | None = None
     city: str | None = None
     description: str | None = None
+    linkedin_url: str | None = None
 
 
 class AccountRead(BaseModel):
@@ -37,3 +39,4 @@ class AccountRead(BaseModel):
     industry: str | None
     city: str | None
     description: str | None
+    linkedin_url: str | None

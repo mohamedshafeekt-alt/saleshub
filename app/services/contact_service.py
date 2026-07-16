@@ -7,7 +7,7 @@ account_service.convert_lead_to_account reuses lead_service.get_lead's
 exceptions without wrapping them).
 """
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
@@ -29,12 +29,23 @@ async def create_contact(db: AsyncSession, data: ContactCreate, requester: User)
     return contact
 
 
-async def list_contacts_for_account(db: AsyncSession, account_id: int, requester: User) -> list[Contact]:
+async def list_contacts_for_account(
+    db: AsyncSession, account_id: int, requester: User, *, limit: int = 20, offset: int = 0
+) -> tuple[list[Contact], int]:
     await get_account(db, account_id, requester)
 
-    query = select(Contact).where(Contact.account_id == account_id).order_by(Contact.created_at)
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    total = (
+        await db.execute(select(func.count(Contact.id)).where(Contact.account_id == account_id))
+    ).scalar_one()
+    query = (
+        select(Contact)
+        .where(Contact.account_id == account_id)
+        .order_by(Contact.created_at)
+        .limit(limit)
+        .offset(offset)
+    )
+    items = list((await db.execute(query)).scalars().all())
+    return items, total
 
 
 async def _get_contact_or_raise(db: AsyncSession, contact_id: int, requester: User) -> Contact:

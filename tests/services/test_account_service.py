@@ -62,7 +62,7 @@ async def test_list_accounts_sales_rep_only_sees_own_accounts_even_with_owner_id
     own_account = await make_account(owner_id=rep_a.id, company="Own Co")
     await make_account(owner_id=rep_b.id, company="Other Co")
 
-    results = await list_accounts(db_session, requester=rep_a, owner_id=rep_b.id)
+    results, _total = await list_accounts(db_session, requester=rep_a, owner_id=rep_b.id)
 
     assert [account.id for account in results] == [own_account.id]
 
@@ -74,7 +74,7 @@ async def test_list_accounts_manager_sees_all_when_no_owner_id_given(db_session:
     account_a = await make_account(owner_id=rep_a.id, company="Co A")
     account_b = await make_account(owner_id=rep_b.id, company="Co B")
 
-    results = await list_accounts(db_session, requester=manager)
+    results, _total = await list_accounts(db_session, requester=manager)
 
     ids = {account.id for account in results}
     assert ids == {account_a.id, account_b.id}
@@ -87,7 +87,7 @@ async def test_list_accounts_manager_filters_by_owner_id_when_given(db_session: 
     account_a = await make_account(owner_id=rep_a.id, company="Co E")
     await make_account(owner_id=rep_b.id, company="Co F")
 
-    results = await list_accounts(db_session, requester=manager, owner_id=rep_a.id)
+    results, _total = await list_accounts(db_session, requester=manager, owner_id=rep_a.id)
 
     assert [account.id for account in results] == [account_a.id]
 
@@ -97,7 +97,7 @@ async def test_list_accounts_filters_by_tier(db_session: AsyncSession, make_acco
     gold_account = await make_account(owner_id=owner.id, company="Tier Gold Co", tier=LeadTier.GOLD)
     await make_account(owner_id=owner.id, company="Tier Bronze Co", tier=LeadTier.BRONZE)
 
-    results = await list_accounts(db_session, requester=owner, tier=LeadTier.GOLD)
+    results, _total = await list_accounts(db_session, requester=owner, tier=LeadTier.GOLD)
 
     assert [account.id for account in results] == [gold_account.id]
 
@@ -108,7 +108,7 @@ async def test_list_accounts_search_matches_company_name(db_session: AsyncSessio
     match = await make_account(owner_id=owner.id, company="Rocketship Inc")
     await make_account(owner_id=owner.id, company="Other Co")
 
-    results = await list_accounts(db_session, requester=manager, search="rocketship")
+    results, _total = await list_accounts(db_session, requester=manager, search="rocketship")
 
     assert [account.id for account in results] == [match.id]
 
@@ -126,7 +126,7 @@ async def test_list_accounts_search_matches_owner_name(db_session: AsyncSession,
     match = await make_account(owner_id=owner.id, company="Search Match Co")
     await make_account(owner_id=other_owner.id, company="No Match Co")
 
-    results = await list_accounts(db_session, requester=manager, search="alexandra")
+    results, _total = await list_accounts(db_session, requester=manager, search="alexandra")
 
     assert [account.id for account in results] == [match.id]
 
@@ -234,10 +234,11 @@ async def test_convert_lead_to_account_copies_fields_and_sets_source_lead_id(
         email="convert-me@example.com",
         company="Convert Co",
         domain="convert.example.com",
-        tier=LeadTier.GOLD,
     )
 
-    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner)
+    account = await convert_lead_to_account(
+        db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD
+    )
 
     assert account.company == "Convert Co"
     assert account.domain == "convert.example.com"
@@ -250,7 +251,7 @@ async def test_convert_lead_to_account_marks_lead_as_converted(db_session: Async
     owner = await _make_user(db_session, "owner-convert-flag@example.com", UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="convert-flag@example.com")
 
-    await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner)
+    await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
 
     assert lead.is_converted is True
 
@@ -260,10 +261,10 @@ async def test_convert_lead_to_account_raises_for_already_converted_lead(
 ):
     owner = await _make_user(db_session, "owner-convert-twice@example.com", UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="convert-twice@example.com")
-    await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner)
+    await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
 
     with pytest.raises(LeadAlreadyConvertedError):
-        await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner)
+        await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
 
 
 async def test_convert_lead_to_account_raises_not_found_for_missing_lead(db_session: AsyncSession):
@@ -284,14 +285,14 @@ async def test_convert_lead_to_account_raises_forbidden_for_non_owning_sales_rep
         await convert_lead_to_account(db_session, lead_id=lead.id, requester=other_rep)
 
 
-async def test_convert_lead_to_account_overrides_take_precedence_over_lead_values(
+async def test_convert_lead_to_account_owner_override_takes_precedence_over_lead_owner(
     db_session: AsyncSession, make_lead
 ):
     owner = await _make_user(db_session, "owner-convert-override@example.com", UserRole.SALES_REP)
     other_owner = await _make_user(
         db_session, "other-owner-convert-override@example.com", UserRole.SALES_REP
     )
-    lead = await make_lead(owner_id=owner.id, email="convert-override@example.com", tier=LeadTier.BRONZE)
+    lead = await make_lead(owner_id=owner.id, email="convert-override@example.com")
 
     account = await convert_lead_to_account(
         db_session, lead_id=lead.id, requester=owner, tier=LeadTier.DIAMOND, owner_id=other_owner.id
@@ -305,7 +306,7 @@ async def test_convert_lead_to_account_raises_when_tier_and_owner_both_missing(
     db_session: AsyncSession, make_lead
 ):
     manager = await _make_user(db_session, "manager-convert-missing-svc@example.com", UserRole.SALES_MANAGER)
-    lead = await make_lead(owner_id=None, email="convert-missing-svc@example.com", tier=None)
+    lead = await make_lead(owner_id=None, email="convert-missing-svc@example.com")
 
     with pytest.raises(LeadMissingFieldsForConversionError):
         await convert_lead_to_account(db_session, lead_id=lead.id, requester=manager)
@@ -316,7 +317,7 @@ async def test_convert_lead_to_account_missing_fields_resolved_by_overrides(
 ):
     manager = await _make_user(db_session, "manager-convert-resolved-svc@example.com", UserRole.SALES_MANAGER)
     new_owner = await _make_user(db_session, "owner-convert-resolved-svc@example.com", UserRole.SALES_REP)
-    lead = await make_lead(owner_id=None, email="convert-resolved-svc@example.com", tier=None)
+    lead = await make_lead(owner_id=None, email="convert-resolved-svc@example.com")
 
     account = await convert_lead_to_account(
         db_session, lead_id=lead.id, requester=manager, tier=LeadTier.GOLD, owner_id=new_owner.id

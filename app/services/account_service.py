@@ -1,7 +1,7 @@
 """Account business logic: role-scoped listing/search, ownership-checked
 get/update/delete, and Lead -> Account conversion."""
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
@@ -43,21 +43,18 @@ async def list_accounts(
     search: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> list[Account]:
+) -> tuple[list[Account], int]:
     if requester.role == UserRole.SALES_REP:
         owner_id = requester.id
 
-    query = select(Account)
-    if search is not None:
-        query = query.join(User, Account.owner_id == User.id)
-
+    filters = []
     if owner_id is not None:
-        query = query.where(Account.owner_id == owner_id)
+        filters.append(Account.owner_id == owner_id)
     if tier is not None:
-        query = query.where(Account.tier == tier)
+        filters.append(Account.tier == tier)
     if search is not None:
         pattern = f"%{search}%"
-        query = query.where(
+        filters.append(
             or_(
                 Account.company.ilike(pattern),
                 User.first_name.ilike(pattern),
@@ -65,9 +62,18 @@ async def list_accounts(
             )
         )
 
-    query = query.order_by(Account.created_at.desc()).limit(limit).offset(offset)
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    count_query = select(func.count(Account.id))
+    items_query = select(Account)
+    if search is not None:
+        count_query = count_query.join(User, Account.owner_id == User.id)
+        items_query = items_query.join(User, Account.owner_id == User.id)
+
+    count_query = count_query.where(*filters)
+    items_query = items_query.where(*filters).order_by(Account.created_at.desc()).limit(limit).offset(offset)
+
+    total = (await db.execute(count_query)).scalar_one()
+    items = list((await db.execute(items_query)).scalars().all())
+    return items, total
 
 
 async def _get_account_or_raise(db: AsyncSession, account_id: int, requester: User) -> Account:
@@ -112,7 +118,7 @@ async def convert_lead_to_account(
     if lead.is_converted:
         raise LeadAlreadyConvertedError(f"Lead already converted: {lead_id}")
 
-    resolved_tier = tier or lead.tier
+    resolved_tier = tier
     resolved_owner_id = owner_id or lead.owner_id
     missing = [
         name

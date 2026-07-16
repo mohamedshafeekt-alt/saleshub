@@ -156,7 +156,7 @@ async def test_list_deals_sales_rep_only_sees_own_deals_even_with_owner_id_param
     own_deal = await make_deal(account_id=account.id, owner_id=rep_a.id, deal_name="Own Deal")
     await make_deal(account_id=account.id, owner_id=rep_b.id, deal_name="Other Deal")
 
-    results = await list_deals(db_session, requester=rep_a, owner_id=rep_b.id)
+    results, _total = await list_deals(db_session, requester=rep_a, owner_id=rep_b.id)
 
     assert [deal.id for deal in results] == [own_deal.id]
 
@@ -171,7 +171,7 @@ async def test_list_deals_manager_sees_all_when_no_filter(
     deal_a = await make_deal(account_id=account.id, owner_id=rep_a.id, deal_name="Deal A")
     deal_b = await make_deal(account_id=account.id, owner_id=rep_b.id, deal_name="Deal B")
 
-    results = await list_deals(db_session, requester=manager)
+    results, _total = await list_deals(db_session, requester=manager)
 
     ids = {deal.id for deal in results}
     assert ids == {deal_a.id, deal_b.id}
@@ -185,7 +185,7 @@ async def test_list_deals_filters_by_owner_id(db_session: AsyncSession, make_acc
     deal_a = await make_deal(account_id=account.id, owner_id=rep_a.id, deal_name="Owner Deal A")
     await make_deal(account_id=account.id, owner_id=rep_b.id, deal_name="Owner Deal B")
 
-    results = await list_deals(db_session, requester=manager, owner_id=rep_a.id)
+    results, _total = await list_deals(db_session, requester=manager, owner_id=rep_a.id)
 
     assert [deal.id for deal in results] == [deal_a.id]
 
@@ -198,7 +198,7 @@ async def test_list_deals_filters_by_account_id(db_session: AsyncSession, make_a
     deal_a = await make_deal(account_id=account_a.id, owner_id=rep.id, deal_name="Acct Deal A")
     await make_deal(account_id=account_b.id, owner_id=rep.id, deal_name="Acct Deal B")
 
-    results = await list_deals(db_session, requester=manager, account_id=account_a.id)
+    results, _total = await list_deals(db_session, requester=manager, account_id=account_a.id)
 
     assert [deal.id for deal in results] == [deal_a.id]
 
@@ -213,7 +213,7 @@ async def test_list_deals_filters_by_stage(db_session: AsyncSession, make_accoun
         account_id=account.id, owner_id=rep.id, deal_name="Proposal Deal", stage=DealStage.PROPOSALS
     )
 
-    results = await list_deals(db_session, requester=rep, stage=DealStage.EVALUATION)
+    results, _total = await list_deals(db_session, requester=rep, stage=DealStage.EVALUATION)
 
     assert [deal.id for deal in results] == [eval_deal.id]
 
@@ -224,7 +224,7 @@ async def test_list_deals_filters_by_search(db_session: AsyncSession, make_accou
     match = await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Rocketship Expansion")
     await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Unrelated Deal")
 
-    results = await list_deals(db_session, requester=rep, search="rocketship")
+    results, _total = await list_deals(db_session, requester=rep, search="rocketship")
 
     assert [deal.id for deal in results] == [match.id]
 

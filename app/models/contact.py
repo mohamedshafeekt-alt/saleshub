@@ -11,7 +11,6 @@ __all__ = ["Contact"]
 class Contact(Base):
     __tablename__ = "contacts"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     first_name: Mapped[str] = mapped_column(nullable=False)
     last_name: Mapped[str | None] = mapped_column(nullable=True)
     email: Mapped[str | None] = mapped_column(nullable=True)

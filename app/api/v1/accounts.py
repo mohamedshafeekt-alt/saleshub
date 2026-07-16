@@ -10,6 +10,7 @@ from app.models.user import User, UserRole
 from app.schemas.account import AccountCreate, AccountRead, AccountUpdate
 from app.schemas.contact import ContactRead
 from app.schemas.deal import DealRead
+from app.schemas.generic_response import Page
 from app.services.account_service import (
     AccountAccessForbiddenError,
     AccountNotFoundError,
@@ -40,7 +41,7 @@ async def create_account_route(
     return AccountRead.model_validate(account)
 
 
-@router.get("", response_model=list[AccountRead])
+@router.get("", response_model=Page[AccountRead])
 async def list_accounts_route(
     owner_id: int | None = Query(None),
     tier: LeadTier | None = Query(None),
@@ -49,8 +50,8 @@ async def list_accounts_route(
     offset: int = Query(0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[AccountRead]:
-    accounts = await list_accounts(
+) -> Page[AccountRead]:
+    accounts, total = await list_accounts(
         db,
         requester=current_user,
         owner_id=owner_id,
@@ -59,7 +60,12 @@ async def list_accounts_route(
         limit=limit,
         offset=offset,
     )
-    return [AccountRead.model_validate(account) for account in accounts]
+    return Page[AccountRead](
+        items=[AccountRead.model_validate(account) for account in accounts],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{account_id}", response_model=AccountRead)
@@ -112,20 +118,29 @@ async def delete_account_route(
     await db.commit()
 
 
-@router.get("/{account_id}/contacts", response_model=list[ContactRead])
+@router.get("/{account_id}/contacts", response_model=Page[ContactRead])
 async def list_contacts_for_account_route(
     account_id: int,
+    limit: int = Query(20),
+    offset: int = Query(0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[ContactRead]:
+) -> Page[ContactRead]:
     try:
-        contacts = await list_contacts_for_account(db, account_id, requester=current_user)
+        contacts, total = await list_contacts_for_account(
+            db, account_id, requester=current_user, limit=limit, offset=offset
+        )
     except AccountNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except AccountAccessForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
-    return [ContactRead.model_validate(contact) for contact in contacts]
+    return Page[ContactRead](
+        items=[ContactRead.model_validate(contact) for contact in contacts],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.get("/{account_id}/deals", response_model=list[DealRead])

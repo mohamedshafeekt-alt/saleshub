@@ -12,3 +12,11 @@ async def send_new_user_credentials_email(sender: EmailSender, to: str, password
         f"Please log in and change your password."
     )
     await sender.send(to=to, subject=subject, body=body)
+
+
+async def send_new_lead_notification_email(
+    sender: EmailSender, to: str, lead_name: str, company: str
+) -> None:
+    subject = f"New lead created: {company}"
+    body = f"A new lead has been created on SalesHub.\n\nName: {lead_name}\nCompany: {company}"
+    await sender.send(to=to, subject=subject, body=body)

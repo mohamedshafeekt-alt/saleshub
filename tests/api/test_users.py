@@ -220,13 +220,13 @@ async def test_list_users_as_admin_returns_200(client: AsyncClient, make_user, a
     assert response.status_code == 200
 
 
-async def test_list_users_as_delivery_sme_returns_403(client: AsyncClient, make_user, auth_headers):
-    sme = await make_user(email="sme-blocked-list@example.com", role=UserRole.DELIVERY_SME)
+async def test_list_users_as_delivery_sme_returns_200(client: AsyncClient, make_user, auth_headers):
+    sme = await make_user(email="sme-allowed-list@example.com", role=UserRole.DELIVERY_SME)
     headers = auth_headers(sme)
 
     response = await client.get(USERS_URL, headers=headers)
 
-    assert response.status_code == 403
+    assert response.status_code == 200
 
 
 async def test_list_users_no_auth_header_returns_401(client: AsyncClient):

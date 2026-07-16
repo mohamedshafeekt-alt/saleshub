@@ -14,7 +14,6 @@ __all__ = ["Deal"]
 class Deal(Base):
     __tablename__ = "deals"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     deal_name: Mapped[str] = mapped_column(nullable=False)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
     value: Mapped[float | None] = mapped_column(nullable=True)

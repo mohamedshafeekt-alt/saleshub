@@ -35,6 +35,13 @@ class LeadStatus(str, enum.Enum):
     LOST_LEAD = "lost_lead"
 
 
+class LeadActivityType(str, enum.Enum):
+    NOTE = "note"
+    MEETING = "meeting"
+    CALL = "call"
+    COMMENT = "comment"
+
+
 class DealStage(str, enum.Enum):
     RECEIVED_REQUIREMENTS = "received_requirements"
     QUALIFIED_TO_BUY = "qualified_to_buy"

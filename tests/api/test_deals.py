@@ -194,7 +194,7 @@ async def test_list_deals_sales_rep_only_sees_own_deals(
     response = await client.get(DEALS_URL, params={"owner_id": rep_b.id}, headers=headers)
 
     assert response.status_code == 200
-    assert [deal["id"] for deal in response.json()] == [own_deal.id]
+    assert [deal["id"] for deal in response.json()["items"]] == [own_deal.id]
 
 
 async def test_list_deals_manager_sees_all_deals(
@@ -211,8 +211,25 @@ async def test_list_deals_manager_sees_all_deals(
     response = await client.get(DEALS_URL, headers=headers)
 
     assert response.status_code == 200
-    ids = {deal["id"] for deal in response.json()}
+    ids = {deal["id"] for deal in response.json()["items"]}
     assert {deal_a.id, deal_b.id} <= ids
+
+
+async def test_list_deals_total_reflects_full_filtered_count_not_page_size(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    rep = await make_user(email="rep-total-count-deal@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Total Count Deal Co")
+    for i in range(3):
+        await make_deal(account_id=account.id, owner_id=rep.id, deal_name=f"Total Count Deal {i}")
+    headers = auth_headers(rep)
+
+    response = await client.get(DEALS_URL, params={"limit": 2, "offset": 0}, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["items"]) == 2
+    assert body["total"] == 3
 
 
 async def test_list_deals_filters_by_stage(
@@ -231,7 +248,7 @@ async def test_list_deals_filters_by_stage(
     response = await client.get(DEALS_URL, params={"stage": "evaluation"}, headers=headers)
 
     assert response.status_code == 200
-    assert [deal["id"] for deal in response.json()] == [eval_deal.id]
+    assert [deal["id"] for deal in response.json()["items"]] == [eval_deal.id]
 
 
 async def test_list_deals_filters_by_search(
@@ -246,7 +263,7 @@ async def test_list_deals_filters_by_search(
     response = await client.get(DEALS_URL, params={"search": "searchable"}, headers=headers)
 
     assert response.status_code == 200
-    assert [deal["id"] for deal in response.json()] == [match.id]
+    assert [deal["id"] for deal in response.json()["items"]] == [match.id]
 
 
 async def test_get_deal_returns_404_for_nonexistent_id(client: AsyncClient, make_user, auth_headers):

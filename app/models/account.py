@@ -24,3 +24,4 @@ class Account(Base):
     industry: Mapped[str | None] = mapped_column(nullable=True)
     city: Mapped[str | None] = mapped_column(nullable=True)
     description: Mapped[str | None] = mapped_column(nullable=True)
+    linkedin_url: Mapped[str | None] = mapped_column(nullable=True)

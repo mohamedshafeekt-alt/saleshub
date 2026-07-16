@@ -8,6 +8,7 @@ from app.db.session import get_db
 from app.models.enums import DealStage
 from app.models.user import User, UserRole
 from app.schemas.deal import DealCreate, DealRead, DealStageHistoryRead, DealUpdate
+from app.schemas.generic_response import Page
 from app.services.account_service import AccountNotFoundError
 from app.services.deal_service import (
     ColdReasonRequiredError,
@@ -45,7 +46,7 @@ async def create_deal_route(
     return DealRead.model_validate(deal)
 
 
-@router.get("", response_model=list[DealRead])
+@router.get("", response_model=Page[DealRead])
 async def list_deals_route(
     owner_id: int | None = Query(None),
     account_id: int | None = Query(None),
@@ -55,8 +56,8 @@ async def list_deals_route(
     offset: int = Query(0),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> list[DealRead]:
-    deals = await list_deals(
+) -> Page[DealRead]:
+    deals, total = await list_deals(
         db,
         requester=current_user,
         owner_id=owner_id,
@@ -66,7 +67,9 @@ async def list_deals_route(
         limit=limit,
         offset=offset,
     )
-    return [DealRead.model_validate(deal) for deal in deals]
+    return Page[DealRead](
+        items=[DealRead.model_validate(deal) for deal in deals], total=total, limit=limit, offset=offset
+    )
 
 
 @router.get("/{deal_id}", response_model=DealRead)

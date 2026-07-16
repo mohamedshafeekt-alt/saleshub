@@ -12,6 +12,7 @@ from datetime import timedelta
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db.base import Base
@@ -21,12 +22,38 @@ TEST_DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://saleshub:saleshub@localhost:5432/saleshub_test",
 )
 
+# Base.metadata.create_all (below) only creates missing tables -- it can't
+# express the lead_activities -> leads.updated_at trigger, which lives as raw
+# SQL in an Alembic migration. Recreate it here too so a fresh test DB (a new
+# clone, CI) doesn't need `alembic upgrade head` run against it first for
+# tests/db/test_lead_activity_trigger.py to pass. asyncpg rejects multiple
+# commands in a single prepared statement, so each DDL statement is its own
+# conn.execute() call rather than one multi-statement string.
+_CREATE_TOUCH_LEAD_UPDATED_AT_STATEMENTS = [
+    """
+    CREATE OR REPLACE FUNCTION touch_lead_updated_at() RETURNS TRIGGER AS $$
+    BEGIN
+        UPDATE leads SET updated_at = clock_timestamp() WHERE id = NEW.lead_id;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS lead_activities_touch_lead_updated_at ON lead_activities;",
+    """
+    CREATE TRIGGER lead_activities_touch_lead_updated_at
+    AFTER INSERT ON lead_activities
+    FOR EACH ROW EXECUTE FUNCTION touch_lead_updated_at();
+    """,
+]
+
 
 @pytest_asyncio.fixture(scope="session")
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
     eng = create_async_engine(TEST_DATABASE_URL)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
+        for statement in _CREATE_TOUCH_LEAD_UPDATED_AT_STATEMENTS:
+            await conn.execute(text(statement))
     yield eng
     await eng.dispose()
 
@@ -81,12 +108,13 @@ async def make_user(db_session: AsyncSession):
         password: str = "correct-password",
         role: UserRole = UserRole.SALES_REP,
         is_active: bool = True,
+        first_name: str = "Test",
     ):
         user = User(
             email=email,
             hashed_password=hash_password(password),
             role=role,
-            first_name="Test",
+            first_name=first_name,
             is_active=is_active,
         )
         db_session.add(user)
@@ -106,7 +134,7 @@ async def make_lead(db_session: AsyncSession):
     thing under test. Mirrors make_user's style.
     """
 
-    from app.models.enums import LeadSource, LeadTier
+    from app.models.enums import LeadSource
     from app.models.lead import Lead
 
     async def _make_lead(
@@ -116,7 +144,6 @@ async def make_lead(db_session: AsyncSession):
         last_name: str | None = "Leadlast",
         company: str = "Acme Corp",
         source: LeadSource = LeadSource.WEBSITE,
-        tier: LeadTier = LeadTier.GOLD,
         **kwargs,
     ):
         lead = Lead(
@@ -125,7 +152,6 @@ async def make_lead(db_session: AsyncSession):
             company=company,
             email=email,
             source=source,
-            tier=tier,
             owner_id=owner_id,
             **kwargs,
         )

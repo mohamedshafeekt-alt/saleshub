@@ -2,7 +2,7 @@
 history, role-scoped listing/search, ownership-checked get/update/delete,
 stage-transition history logging, and cold-reason enforcement."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.account import Account
@@ -57,23 +57,24 @@ async def list_deals(
     search: str | None = None,
     limit: int = 20,
     offset: int = 0,
-) -> list[Deal]:
+) -> tuple[list[Deal], int]:
     if requester.role == UserRole.SALES_REP:
         owner_id = requester.id
 
-    query = select(Deal)
+    filters = []
     if owner_id is not None:
-        query = query.where(Deal.owner_id == owner_id)
+        filters.append(Deal.owner_id == owner_id)
     if account_id is not None:
-        query = query.where(Deal.account_id == account_id)
+        filters.append(Deal.account_id == account_id)
     if stage is not None:
-        query = query.where(Deal.stage == stage)
+        filters.append(Deal.stage == stage)
     if search is not None:
-        query = query.where(Deal.deal_name.ilike(f"%{search}%"))
+        filters.append(Deal.deal_name.ilike(f"%{search}%"))
 
-    query = query.order_by(Deal.created_at.desc()).limit(limit).offset(offset)
-    result = await db.execute(query)
-    return list(result.scalars().all())
+    total = (await db.execute(select(func.count(Deal.id)).where(*filters))).scalar_one()
+    items_query = select(Deal).where(*filters).order_by(Deal.created_at.desc()).limit(limit).offset(offset)
+    items = list((await db.execute(items_query)).scalars().all())
+    return items, total
 
 
 async def _get_deal_or_raise(db: AsyncSession, deal_id: int, requester: User) -> Deal:

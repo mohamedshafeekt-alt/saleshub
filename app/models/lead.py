@@ -1,12 +1,18 @@
 """Lead ORM model: prospecting record owned by a Sales Rep."""
 
 from datetime import date
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
-from app.models.enums import LeadSource, LeadStatus, LeadTier
+from app.models.enums import LeadSource, LeadStatus
+
+if TYPE_CHECKING:
+    from app.models.lead_activity import LeadActivity
+    from app.models.lead_contact import LeadContact
+    from app.models.user import User
 
 __all__ = ["Lead"]
 
@@ -14,7 +20,6 @@ __all__ = ["Lead"]
 class Lead(Base):
     __tablename__ = "leads"
 
-    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
     first_name: Mapped[str] = mapped_column(nullable=False)
     last_name: Mapped[str | None] = mapped_column(nullable=True)
     company: Mapped[str] = mapped_column(nullable=False)
@@ -27,10 +32,6 @@ class Lead(Base):
         Enum(LeadSource, name="lead_source", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
         nullable=False,
     )
-    tier: Mapped[LeadTier | None] = mapped_column(
-        Enum(LeadTier, name="lead_tier", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
-        nullable=True,
-    )
     status: Mapped[LeadStatus] = mapped_column(
         Enum(LeadStatus, name="lead_status", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
         nullable=False,
@@ -41,3 +42,23 @@ class Lead(Base):
     next_follow_up_date: Mapped[date | None] = mapped_column(nullable=True)
     follow_up_note: Mapped[str | None] = mapped_column(nullable=True)
     is_converted: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
+
+    # Eager (joined) since every list/get response needs the owner's display
+    # name; contacts/activities stay lazy since only the single-lead detail
+    # view needs them and eager-loading them for every list row would waste
+    # a query fanning out per lead.
+    owner: Mapped["User | None"] = relationship("User", lazy="joined")
+    contacts: Mapped[list["LeadContact"]] = relationship("LeadContact", order_by="LeadContact.id")
+    # id, not created_at: created_at is now()-based (fixed for the whole
+    # transaction), so activities inserted in the same transaction would tie.
+    activities: Mapped[list["LeadActivity"]] = relationship("LeadActivity", order_by="LeadActivity.id")
+
+    @property
+    def owner_name(self) -> str | None:
+        if self.owner is None:
+            return None
+        return " ".join(filter(None, [self.owner.first_name, self.owner.last_name]))
+
+    @property
+    def activity_count(self) -> int:
+        return len(self.activities)
