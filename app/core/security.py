@@ -1,5 +1,7 @@
-"""Password hashing and JWT create/decode helpers."""
+"""Password hashing, JWT create/decode, and refresh-token helpers."""
 
+import hashlib
+import secrets
 from datetime import UTC, datetime, timedelta
 
 from jose import jwt
@@ -26,3 +28,16 @@ def create_access_token(subject: str, expires_delta: timedelta | None = None) ->
 
 def decode_access_token(token: str) -> dict:
     return jwt.decode(token, settings.secret_key, algorithms=[settings.jwt_algorithm])
+
+
+def create_refresh_token() -> str:
+    """Opaque high-entropy token — not a JWT, so it can be revoked server-side
+    (a signed JWT would remain valid until it expired, logout couldn't kill it)."""
+    return secrets.token_urlsafe(32)
+
+
+def hash_token(token: str) -> str:
+    """SHA-256 for exact-match lookup. Not bcrypt: this is a high-entropy
+    random token, not a low-entropy password, so a slow salted hash buys
+    nothing and would force a full-table scan instead of an indexed lookup."""
+    return hashlib.sha256(token.encode()).hexdigest()

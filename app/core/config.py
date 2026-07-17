@@ -12,6 +12,7 @@ class Settings(BaseSettings):
     secret_key: str
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60
+    refresh_token_expire_days: int = 30
     smtp_host: str
     smtp_port: int = 587
     smtp_username: str
