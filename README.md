@@ -48,8 +48,12 @@ _(updated after every feature — do not batch these)_
 - [x] Deal CRUD + stage transitions + stage history — `POST/GET/PATCH/DELETE /api/v1/deals`, `GET /api/v1/deals/{id}/stage-history`, `GET /api/v1/accounts/{id}/deals`; Deal has its own `owner_id` independent of the account's owner, any stage can move to any other stage (no transition graph), every stage change (including creation) writes a `deal_stage_history` row
 - [x] Deal "mark cold with reason" — `cold_reason` on Deal, required (400) whenever the resulting stage is `cold_deals` with no reason on record, whether set on create or via PATCH
 - [x] Paginated list responses — `GET /api/v1/leads`, `/api/v1/accounts`, `/api/v1/deals`, and `/api/v1/accounts/{id}/contacts` now return `{items, total, limit, offset}` instead of a bare array, so the frontend can render "1-25 of N" without a second request
+<<<<<<< Updated upstream
 - [x] CORS middleware (`app/main.py`) — wildcard origins for now (safe: auth is a Bearer token, not a cookie, so no `allow_credentials` needed); without this, browsers/Flutter-web got a 404/405 on the `OPTIONS` preflight before ever reaching a route
 - [x] Refresh tokens + logout — `POST /api/v1/auth/login` now also returns a `refresh_token` (opaque, DB-backed via new `refresh_tokens` table, 30-day expiry by default); `POST /api/v1/auth/refresh` exchanges it for a new access token (no rotation — same refresh token reused until logout/expiry); `POST /api/v1/auth/logout` (authenticated) revokes the caller's own refresh token, idempotently
+=======
+- [x] "Save & Convert to Account" on the New Lead form — `POST /api/v1/leads/convert` creates an Account (and its Contacts) directly from the form, without ever creating a Lead row; company/domain/tier/owner_id required, sibling to the existing `POST /api/v1/leads/{id}/convert` (which converts an already-saved Lead); contacts arrive as a list, only the first needs a name — later ones just add another email/phone and inherit it
+>>>>>>> Stashed changes
 - [ ] Static Pre-Sales Checklist per deal
 - [ ] Activity log for Account/Deal (Lead's is done; a generic cross-entity log is still open)
 - [ ] Notifications (task overdue, stage transition)
