@@ -12,6 +12,13 @@ class LeadActivityCreate(BaseModel):
     note: str = Field(min_length=1)
 
 
+class LeadActivityUpdate(BaseModel):
+    """Partial update: only supplied fields are applied."""
+
+    type: LeadActivityType | None = None
+    note: str | None = Field(default=None, min_length=1)
+
+
 class LeadActivityRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -21,10 +28,14 @@ class LeadActivityRead(BaseModel):
     note: str
     created_by: int
     created_at: datetime
+    updated_by: int | None
+    updated_at: datetime
 
 
 class LeadActivityDetailRead(LeadActivityRead):
-    """LeadActivityRead plus the creator's display name, for the single-lead
-    detail view (the Activity log needs "Logged by <name>", not an id)."""
+    """LeadActivityRead plus the creator's/editor's display names, for the
+    single-lead detail view (the Activity log needs "Logged by <name>" /
+    "Edited by <name>", not an id)."""
 
     created_by_name: str
+    updated_by_name: str | None

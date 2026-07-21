@@ -8,11 +8,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import LeadSource
 from app.models.lead import Lead
-from app.models.user import User, UserRole
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
 
 
 async def test_raw_sql_insert_into_lead_activities_touches_lead_updated_at(db_session: AsyncSession):
-    user = User(email="trigger-user@example.com", hashed_password="x", first_name="Rep", role=UserRole.SALES_REP)
+    user = User(email="trigger-user@example.com", hashed_password="x", first_name="Rep", role_id=await role_id_for(db_session, UserRole.SALES_REP))
     db_session.add(user)
     await db_session.flush()
 

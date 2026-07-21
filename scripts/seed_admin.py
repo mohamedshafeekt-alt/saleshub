@@ -1,4 +1,5 @@
-"""Idempotently seed an admin user from ADMIN_EMAIL / ADMIN_PASSWORD env vars.
+"""Idempotently seed the permission catalog + starter roles, and an admin
+user from ADMIN_EMAIL / ADMIN_PASSWORD env vars.
 
 Usage: PYTHONPATH=. ADMIN_EMAIL=... ADMIN_PASSWORD=... uv run python scripts/seed_admin.py
 
@@ -16,9 +17,10 @@ import sys
 
 from sqlalchemy import select
 
+from app.core.rbac_seed import seed_permissions_and_roles
 from app.core.security import hash_password
 from app.db.session import async_session_factory
-from app.models.user import User, UserRole
+from app.models.user import User
 
 
 async def seed_admin() -> None:
@@ -29,6 +31,9 @@ async def seed_admin() -> None:
         sys.exit(1)
 
     async with async_session_factory() as db:
+        roles_by_name = await seed_permissions_and_roles(db)
+        await db.commit()
+
         result = await db.execute(select(User).where(User.email == email))
         if result.scalar_one_or_none() is not None:
             print(f"Admin user already exists: {email}")
@@ -39,7 +44,7 @@ async def seed_admin() -> None:
                 email=email,
                 hashed_password=hash_password(password),
                 first_name="Admin",
-                role=UserRole.ADMIN,
+                role_id=roles_by_name["Admin"].id,
             )
         )
         await db.commit()

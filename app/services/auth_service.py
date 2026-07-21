@@ -23,6 +23,7 @@ def _utcnow() -> datetime:
 async def issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
     access_token = create_access_token(subject=str(user.id))
     refresh_token = create_refresh_token()
+    user.last_login_at = _utcnow()
     db.add(
         RefreshToken(
             user_id=user.id,

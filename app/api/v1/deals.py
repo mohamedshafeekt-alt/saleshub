@@ -3,10 +3,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, require_role
+from app.core.deps import get_current_user
+from app.core.permission_codes import DEALS_ACCESS
+from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.enums import DealStage
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.deal import DealCreate, DealRead, DealStageHistoryRead, DealUpdate
 from app.schemas.generic_response import Page
 from app.services.account_service import AccountNotFoundError
@@ -22,11 +24,7 @@ from app.services.deal_service import (
     update_deal,
 )
 
-router = APIRouter(
-    prefix="/deals",
-    tags=["deals"],
-    dependencies=[Depends(require_role(UserRole.SALES_REP, UserRole.SALES_MANAGER, UserRole.ADMIN))],
-)
+router = APIRouter(prefix="/deals", tags=["deals"])
 
 
 @router.post("", response_model=DealRead, status_code=status.HTTP_201_CREATED)
@@ -138,3 +136,6 @@ async def list_stage_history_route(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     return [DealStageHistoryRead.model_validate(row) for row in history]
+
+
+tag_router_permissions(router, DEALS_ACCESS)

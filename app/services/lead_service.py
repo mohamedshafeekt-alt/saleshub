@@ -7,11 +7,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.logging import logger
+from app.core.permission_codes import LEADS_NOTIFY_ON_CREATE, LEADS_VIEW_ALL
 from app.models.enums import LeadSource, LeadStatus
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.models.lead_contact import LeadContact
-from app.models.user import User, UserRole
+from app.models.permission import Permission
+from app.models.role import Role
+from app.models.role_permission import role_permissions
+from app.models.user import User
 from app.schemas.lead import LeadUpsert
 from app.services.email.sender import EmailSender
 from app.services.email.templates import send_new_lead_notification_email
@@ -54,13 +58,21 @@ async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSen
         db.add(LeadContact(lead_id=lead.id, email=contact.email, phone=contact.phone))
     await db.flush()
 
-    result = await db.execute(select(User).where(User.role == UserRole.ADMIN))
+    result = await db.execute(
+        select(User)
+        .join(Role, User.role_id == Role.id)
+        .join(role_permissions, Role.id == role_permissions.c.role_id)
+        .join(Permission, role_permissions.c.permission_id == Permission.id)
+        .where(Permission.code == LEADS_NOTIFY_ON_CREATE)
+    )
     lead_name = f"{lead.first_name} {lead.last_name}".strip()
-    for admin in result.scalars():
+    for notifiable in result.scalars():
         try:
-            await send_new_lead_notification_email(email_sender, admin.email, lead_name, lead.company)
+            await send_new_lead_notification_email(email_sender, notifiable.email, lead_name, lead.company)
         except Exception:
-            logger.warning("Failed to send new-lead notification email to %s", admin.email, exc_info=True)
+            logger.warning(
+                "Failed to send new-lead notification email to %s", notifiable.email, exc_info=True
+            )
 
     # owner is unloaded on a freshly constructed row (no SELECT has run yet to
     # populate it). Accessing owner_name later during response serialization
@@ -85,7 +97,7 @@ async def list_leads(
     offset: int = 0,
 ) -> tuple[list[Lead], int]:
     filters = []
-    if requester.role in (UserRole.SALES_REP, UserRole.DELIVERY_SME):
+    if LEADS_VIEW_ALL not in requester.permission_codes:
         filters.append(or_(Lead.owner_id == requester.id, Lead.owner_id.is_(None)))
     if owner_id is not None:
         filters.append(Lead.owner_id == owner_id)
@@ -98,20 +110,21 @@ async def list_leads(
         filters.append(
             or_(
                 Lead.company.ilike(pattern),
-                User.first_name.ilike(pattern),
-                User.last_name.ilike(pattern),
+                Lead.first_name.ilike(pattern),
+                Lead.last_name.ilike(pattern),
+                Lead.email.ilike(pattern),
             )
         )
 
-    count_query = select(func.count(Lead.id))
-    items_query = select(Lead).options(selectinload(Lead.owner))
-    if search is not None:
-        # Only the search filter needs the join (it matches against owner name).
-        count_query = count_query.join(User, Lead.owner_id == User.id, isouter=True)
-        items_query = items_query.join(User, Lead.owner_id == User.id, isouter=True)
-
-    count_query = count_query.where(*filters)
-    items_query = items_query.where(*filters).order_by(Lead.created_at.desc()).limit(limit).offset(offset)
+    count_query = select(func.count(Lead.id)).where(*filters)
+    items_query = (
+        select(Lead)
+        .options(selectinload(Lead.owner))
+        .where(*filters)
+        .order_by(Lead.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
 
     total = (await db.execute(count_query)).scalar_one()
     items = list((await db.execute(items_query)).scalars().all())
@@ -120,7 +133,7 @@ async def list_leads(
 
 def _check_lead_access(lead: Lead, requester: User) -> None:
     if (
-        requester.role in (UserRole.SALES_REP, UserRole.DELIVERY_SME)
+        LEADS_VIEW_ALL not in requester.permission_codes
         and lead.owner_id is not None
         and lead.owner_id != requester.id
     ):

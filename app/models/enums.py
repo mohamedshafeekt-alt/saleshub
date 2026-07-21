@@ -3,11 +3,10 @@
 import enum
 
 
-class UserRole(str, enum.Enum):
-    SALES_REP = "sales_rep"
-    DELIVERY_SME = "delivery_sme"
-    SALES_MANAGER = "sales_manager"
-    ADMIN = "admin"
+class UserStatus(str, enum.Enum):
+    ACTIVE = "active"
+    INVITED = "invited"
+    DEACTIVATED = "deactivated"
 
 
 class LeadSource(str, enum.Enum):
@@ -40,6 +39,7 @@ class LeadActivityType(str, enum.Enum):
     MEETING = "meeting"
     CALL = "call"
     COMMENT = "comment"
+    FOLLOW_UP = "follow_up"
 
 
 class DealStage(str, enum.Enum):

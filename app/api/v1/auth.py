@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
+from app.core.rbac import public
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.auth import LoginRequest, LogoutRequest, RefreshRequest, Token
@@ -14,6 +15,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.post("/login", response_model=Token)
+@public
 async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token:
     user = await authenticate_user(db, data.email, data.password)
     if user is None:
@@ -24,6 +26,7 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
 
 
 @router.post("/refresh", response_model=Token)
+@public
 async def refresh(data: RefreshRequest, db: AsyncSession = Depends(get_db)) -> Token:
     try:
         access_token = await auth_service.refresh_access_token(db, data.refresh_token)

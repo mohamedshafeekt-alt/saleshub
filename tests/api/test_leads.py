@@ -10,7 +10,7 @@ each filter (owner_id/source/search), 404 for a missing lead, 204 DELETE.
 import pytest_asyncio
 from httpx import AsyncClient
 
-from app.models.user import UserRole
+from tests.support.roles import UserRole
 
 LEADS_URL = "/api/v1/leads"
 
@@ -929,3 +929,96 @@ async def test_create_lead_activity_empty_note_returns_422(
     )
 
     assert response.status_code == 422
+
+
+async def test_list_lead_activities_returns_200_filtered_by_type(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-list-activities@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="list-activities-lead@example.com")
+    headers = auth_headers(owner)
+    await client.post(
+        f"{LEADS_URL}/{lead.id}/activities", json={"type": "call", "note": "call note"}, headers=headers
+    )
+    await client.post(
+        f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "note note"}, headers=headers
+    )
+
+    response = await client.get(f"{LEADS_URL}/{lead.id}/activities?types=call", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body) == 1
+    assert body[0]["type"] == "call"
+    assert body[0]["created_by_name"]
+
+
+async def test_list_lead_activities_returns_403_for_non_owning_sales_rep(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-owns-list-activity@example.com", role=UserRole.SALES_REP)
+    other_rep = await make_user(email="rep-not-owner-list-activity@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="list-activity-forbidden-api@example.com")
+
+    response = await client.get(f"{LEADS_URL}/{lead.id}/activities", headers=auth_headers(other_rep))
+
+    assert response.status_code == 403
+
+
+async def test_update_lead_activity_returns_200(client: AsyncClient, make_user, auth_headers, make_lead):
+    owner = await make_user(email="rep-update-activity@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="update-activity-lead@example.com")
+    headers = auth_headers(owner)
+    created = (
+        await client.post(
+            f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "original"}, headers=headers
+        )
+    ).json()
+
+    response = await client.patch(
+        f"{LEADS_URL}/{lead.id}/activities/{created['id']}",
+        json={"note": "revised"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["note"] == "revised"
+    assert body["updated_by"] == owner.id
+    assert body["updated_by_name"]
+
+
+async def test_update_lead_activity_returns_404_for_missing_activity(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-update-missing-activity@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="update-missing-activity-lead@example.com")
+
+    response = await client.patch(
+        f"{LEADS_URL}/{lead.id}/activities/999999",
+        json={"note": "revised"},
+        headers=auth_headers(owner),
+    )
+
+    assert response.status_code == 404
+
+
+async def test_delete_lead_activity_returns_204_then_404_on_refetch(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-delete-activity@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="delete-activity-lead@example.com")
+    headers = auth_headers(owner)
+    created = (
+        await client.post(
+            f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "to delete"}, headers=headers
+        )
+    ).json()
+
+    delete_response = await client.delete(f"{LEADS_URL}/{lead.id}/activities/{created['id']}", headers=headers)
+
+    assert delete_response.status_code == 204
+    refetch = await client.patch(
+        f"{LEADS_URL}/{lead.id}/activities/{created['id']}", json={"note": "x"}, headers=headers
+    )
+    assert refetch.status_code == 404

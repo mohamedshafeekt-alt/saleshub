@@ -5,11 +5,12 @@ stage-transition history logging, and cold-reason enforcement."""
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.permission_codes import DEALS_VIEW_ALL
 from app.models.account import Account
 from app.models.deal import Deal
 from app.models.deal_stage_history import DealStageHistory
 from app.models.enums import DealStage
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountNotFoundError, get_account
 
@@ -58,7 +59,7 @@ async def list_deals(
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[Deal], int]:
-    if requester.role == UserRole.SALES_REP:
+    if DEALS_VIEW_ALL not in requester.permission_codes:
         owner_id = requester.id
 
     filters = []
@@ -82,7 +83,7 @@ async def _get_deal_or_raise(db: AsyncSession, deal_id: int, requester: User) ->
     deal = result.scalar_one_or_none()
     if deal is None:
         raise DealNotFoundError(f"Deal not found: {deal_id}")
-    if requester.role == UserRole.SALES_REP and deal.owner_id != requester.id:
+    if DEALS_VIEW_ALL not in requester.permission_codes and deal.owner_id != requester.id:
         raise DealAccessForbiddenError(f"Not permitted to access deal: {deal_id}")
     return deal
 

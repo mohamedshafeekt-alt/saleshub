@@ -7,12 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.enums import LeadActivityType, LeadSource
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
-from app.models.user import User, UserRole
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
 
 
 async def _make_lead_and_user(db_session: AsyncSession, suffix: str = "a") -> tuple[Lead, User]:
     user = User(
-        email=f"activity-user-{suffix}@example.com", hashed_password="x", first_name="Rep", role=UserRole.SALES_REP
+        email=f"activity-user-{suffix}@example.com", hashed_password="x", first_name="Rep", role_id=await role_id_for(db_session, UserRole.SALES_REP)
     )
     db_session.add(user)
     await db_session.flush()

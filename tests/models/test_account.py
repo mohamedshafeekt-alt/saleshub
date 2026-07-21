@@ -5,11 +5,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import LeadSource, LeadTier
-from app.models.user import User, UserRole
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
 
 
 async def _make_owner(db_session: AsyncSession, email: str = "owner@example.com") -> User:
-    owner = User(email=email, hashed_password="x", first_name="Owner", role=UserRole.SALES_REP)
+    owner = User(email=email, hashed_password="x", first_name="Owner", role_id=await role_id_for(db_session, UserRole.SALES_REP))
     db_session.add(owner)
     await db_session.flush()
     return owner

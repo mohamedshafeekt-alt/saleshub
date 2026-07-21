@@ -1,17 +1,18 @@
 """User request/response schemas."""
 
-from pydantic import BaseModel, ConfigDict, EmailStr
+from datetime import datetime
 
-from app.models.user import UserRole
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
+
+from app.models.user import UserStatus
+from app.schemas.role import RoleRead
 
 
 class UserCreate(BaseModel):
     email: EmailStr
     first_name: str
     last_name: str | None = None
-    # Deliberate default (confirmed product decision, not an oversight):
-    # omitting role on creation grants Admin, not a lower-privilege role.
-    role: UserRole = UserRole.ADMIN
+    role_id: int
 
 
 class UserRead(BaseModel):
@@ -21,5 +22,21 @@ class UserRead(BaseModel):
     email: EmailStr
     first_name: str
     last_name: str | None
-    role: UserRole
+    phone_number: str | None
+    avatar_url: str | None
+    role: RoleRead
     is_active: bool
+    status: UserStatus
+    created_at: datetime
+    last_login_at: datetime | None
+
+
+class UserUpdate(BaseModel):
+    first_name: str
+    last_name: str | None = None
+    phone_number: str | None = None
+
+
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(min_length=8)
