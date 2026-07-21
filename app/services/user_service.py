@@ -40,14 +40,29 @@ async def create_user(db: AsyncSession, data: UserCreate, email_sender: EmailSen
         raise RoleNotFoundError(f"Role not found: {data.role_id}")
 
     password = _generate_password()
-    user = User(
-        email=data.email,
-        hashed_password=hash_password(password),
-        first_name=data.first_name,
-        last_name=data.last_name,
-        role_id=data.role_id,
+
+    result = await db.execute(
+        select(User).where(User.email == data.email, User.is_delete.is_(True))
     )
-    db.add(user)
+    existing = result.scalar_one_or_none()
+
+    if existing is not None:
+        existing.first_name = data.first_name
+        existing.last_name = data.last_name
+        existing.role_id = data.role_id
+        existing.hashed_password = hash_password(password)
+        existing.is_delete = False
+        existing.is_active = True
+        user = existing
+    else:
+        user = User(
+            email=data.email,
+            hashed_password=hash_password(password),
+            first_name=data.first_name,
+            last_name=data.last_name,
+            role_id=data.role_id,
+        )
+        db.add(user)
     try:
         await db.flush()
     except IntegrityError as exc:

@@ -7,18 +7,25 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
 from app.models.user import User, UserStatus
-from app.schemas.user import UserUpdate
+from app.schemas.user import UserCreate, UserUpdate
 from app.services.user_service import (
+    EmailAlreadyExistsError,
     IncorrectPasswordError,
     UnsupportedImageTypeError,
     UserNotFoundError,
     change_password,
+    create_user,
     list_users,
     save_avatar,
     soft_delete_user,
     update_profile,
 )
 from tests.support.roles import UserRole, role_id_for
+
+
+class _FakeEmailSender:
+    async def send(self, to: str, subject: str, body: str) -> None:
+        pass
 
 
 async def _make_user(db_session: AsyncSession, email: str, role: UserRole = UserRole.SALES_REP) -> User:
@@ -164,6 +171,47 @@ async def test_list_users_excludes_soft_deleted(db_session: AsyncSession):
     emails = {u.email for u in users}
     assert kept.email in emails
     assert deleted.email not in emails
+
+
+async def test_create_user_reactivates_soft_deleted_email(db_session: AsyncSession):
+    original = await _make_user(db_session, "reactivate-me@example.com", role=UserRole.SALES_REP)
+    await soft_delete_user(db_session, original.id)
+    admin_role_id = await role_id_for(db_session, UserRole.ADMIN)
+
+    reactivated = await create_user(
+        db_session,
+        UserCreate(
+            email="reactivate-me@example.com",
+            first_name="New First",
+            last_name="New Last",
+            role_id=admin_role_id,
+        ),
+        _FakeEmailSender(),
+    )
+
+    assert reactivated.id == original.id
+    assert reactivated.is_delete is False
+    assert reactivated.is_active is True
+    assert reactivated.first_name == "New First"
+    assert reactivated.last_name == "New Last"
+    assert reactivated.role_id == admin_role_id
+
+
+async def test_create_user_rejects_active_duplicate_email(db_session: AsyncSession):
+    await _make_user(db_session, "already-active@example.com")
+    role_id = await role_id_for(db_session, UserRole.SALES_REP)
+
+    with pytest.raises(EmailAlreadyExistsError):
+        await create_user(
+            db_session,
+            UserCreate(
+                email="already-active@example.com",
+                first_name="Dup",
+                last_name=None,
+                role_id=role_id,
+            ),
+            _FakeEmailSender(),
+        )
 
 
 async def test_update_profile_sets_name_and_phone(db_session: AsyncSession):
