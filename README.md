@@ -54,9 +54,9 @@ _(updated after every feature — do not batch these)_
 - [x] Profile self-service — `GET/PATCH /api/v1/users/me` (name/phone, email not editable here), `POST /api/v1/users/me/password` (current-password verified), `POST /api/v1/users/me/avatar` (image/png or image/jpeg, saved to local disk under `media/avatars/`, served via `/media` static mount); `User` gained `phone_number`/`avatar_url`/`last_login_at`, the last one stamped on every successful login
 - [x] Swagger's Authorize button/padlocks now work — `app/core/deps.py` adds an `HTTPBearer` scheme so FastAPI's OpenAPI generator registers a security scheme, wired globally alongside `enforce_rbac` in `app/main.py`; real auth is still done entirely by `rbac_middleware`, this only makes the token show up in `/docs`
 - [x] `POST /api/v1/users` reactivates a soft-deleted user instead of failing "Email already exists" — same email on a previously deleted row now overwrites name/role and reissues a generated password on that same user id (preserves history); a still-active duplicate email still 409s as before
+- [x] Notifications: in-app bell/panel backed by `GET/PATCH/POST/DELETE /api/v1/notifications` (list with `unread_only`/`type` filters, `unread-count`, mark-one-read, mark-all/bulk-read, bulk soft-delete) — populated on new-lead creation (same `LEADS_NOTIFY_ON_CREATE`-permission recipients as the existing admin email), lead reassignment, and deal stage changes, plus a `task_overdue` entry computed at read time from `Lead.next_follow_up_date` (no new Task entity, no scheduler); polling-based, no real-time push, no email mirroring
 - [ ] Static Pre-Sales Checklist per deal
 - [ ] Activity log for Account/Deal (Lead's is done; a generic cross-entity log is still open)
-- [ ] Notifications (task overdue, stage transition)
 - [ ] Dashboard aggregation endpoints (funnel, target vs actual)
 
 ## Milestones (per Phase 1 kickoff)

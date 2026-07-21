@@ -51,3 +51,10 @@ class DealStage(str, enum.Enum):
     CLOSED_WON = "closed_won"
     CLOSED_LOST = "closed_lost"
     COLD_DEALS = "cold_deals"
+
+
+class NotificationType(str, enum.Enum):
+    TASK_OVERDUE = "task_overdue"
+    DEAL_STAGE_CHANGED = "deal_stage_changed"
+    LEAD_ASSIGNED = "lead_assigned"
+    NEW_LEAD = "new_lead"

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import LeadActivityType, LeadSource
+from app.models.enums import LeadActivityType, LeadSource, NotificationType
 from app.models.lead_activity import LeadActivity
 from app.models.lead_contact import LeadContact
 from app.models.user import User
@@ -149,6 +149,44 @@ async def test_create_lead_notifies_all_admins(db_session: AsyncSession):
 
     notified = {call["to"] for call in fake_sender.calls}
     assert notified == {admin_a.email, admin_b.email}
+
+
+async def test_create_lead_creates_in_app_notifications_for_notifiable_users(db_session: AsyncSession):
+    from app.models.notification import Notification
+
+    admin = await _make_user(db_session, "admin-notif@example.com", UserRole.ADMIN)
+
+    data = LeadUpsert(
+        first_name="Jane",
+        company="Acme Corp",
+        email="notify-in-app@acme.com",
+        source=LeadSource.WEBSITE,
+    )
+    lead = await create_lead(db_session, data, FakeEmailSender())
+
+    result = await db_session.execute(
+        select(Notification).where(
+            Notification.recipient_id == admin.id, Notification.type == NotificationType.NEW_LEAD
+        )
+    )
+    notification = result.scalar_one()
+    assert notification.entity_type == "lead"
+    assert notification.entity_id == lead.id
+
+
+async def test_update_lead_reassignment_notifies_new_owner(db_session: AsyncSession, make_lead):
+    from app.models.notification import Notification
+
+    old_owner = await _make_user(db_session, "old-owner@example.com", UserRole.SALES_REP)
+    new_owner = await _make_user(db_session, "new-owner@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=old_owner.id, email="reassign-me@acme.com")
+
+    await update_lead(db_session, lead.id, LeadUpsert(id=lead.id, owner_id=new_owner.id), requester=old_owner)
+
+    result = await db_session.execute(select(Notification).where(Notification.recipient_id == new_owner.id))
+    notification = result.scalar_one()
+    assert notification.entity_id == lead.id
+    assert notification.type == NotificationType.LEAD_ASSIGNED
 
 
 async def test_create_lead_duplicate_email_raises(db_session: AsyncSession):

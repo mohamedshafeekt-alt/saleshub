@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.logging import logger
 from app.core.permission_codes import LEADS_NOTIFY_ON_CREATE, LEADS_VIEW_ALL
-from app.models.enums import LeadSource, LeadStatus
+from app.models.enums import LeadSource, LeadStatus, NotificationType
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.models.lead_contact import LeadContact
@@ -19,6 +19,7 @@ from app.models.user import User
 from app.schemas.lead import LeadUpsert
 from app.services.email.sender import EmailSender
 from app.services.email.templates import send_new_lead_notification_email
+from app.services.notification_service import create_notification
 
 
 class DuplicateLeadEmailError(Exception):
@@ -73,6 +74,15 @@ async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSen
             logger.warning(
                 "Failed to send new-lead notification email to %s", notifiable.email, exc_info=True
             )
+        await create_notification(
+            db,
+            recipient_id=notifiable.id,
+            type=NotificationType.NEW_LEAD,
+            title="New lead created",
+            body=f"{lead_name} at {lead.company} was just added as a new lead.",
+            entity_type="lead",
+            entity_id=lead.id,
+        )
 
     # owner is unloaded on a freshly constructed row (no SELECT has run yet to
     # populate it). Accessing owner_name later during response serialization
@@ -176,8 +186,10 @@ async def get_lead_detail(db: AsyncSession, lead_id: int, requester: User) -> Le
 
 async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requester: User) -> Lead:
     lead = await _get_lead_or_raise(db, lead_id, requester)
+    old_owner_id = lead.owner_id
 
-    for field, value in data.model_dump(exclude_unset=True, exclude={"id", "contacts"}).items():
+    updates = data.model_dump(exclude_unset=True, exclude={"id", "contacts"})
+    for field, value in updates.items():
         setattr(lead, field, value)
 
     try:
@@ -187,6 +199,19 @@ async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requeste
         if _is_duplicate_email_violation(exc):
             raise DuplicateLeadEmailError(f"Email already exists: {data.email}") from exc
         raise
+
+    if "owner_id" in updates and updates["owner_id"] is not None and updates["owner_id"] != old_owner_id:
+        lead_name = f"{lead.first_name} {lead.last_name}".strip()
+        await create_notification(
+            db,
+            recipient_id=updates["owner_id"],
+            type=NotificationType.LEAD_ASSIGNED,
+            title="Lead assigned to you",
+            body=f"You have been assigned the lead {lead_name} at {lead.company}.",
+            actor_id=requester.id,
+            entity_type="lead",
+            entity_id=lead.id,
+        )
 
     # updated_at's onupdate is server-computed (func.now() on Base), so after
     # an UPDATE SQLAlchemy marks it expired rather than refetching it --

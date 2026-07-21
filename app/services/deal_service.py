@@ -9,10 +9,11 @@ from app.core.permission_codes import DEALS_VIEW_ALL
 from app.models.account import Account
 from app.models.deal import Deal
 from app.models.deal_stage_history import DealStageHistory
-from app.models.enums import DealStage
+from app.models.enums import DealStage, NotificationType
 from app.models.user import User
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountNotFoundError, get_account
+from app.services.notification_service import create_notification
 
 
 class DealNotFoundError(Exception):
@@ -116,6 +117,16 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
                 changed_by=requester.id,
                 note=data.note,
             )
+        )
+        await create_notification(
+            db,
+            recipient_id=deal.owner_id,
+            type=NotificationType.DEAL_STAGE_CHANGED,
+            title="Deal stage updated",
+            body=f"{deal.deal_name} moved to {deal.stage.value.replace('_', ' ').title()}.",
+            actor_id=requester.id,
+            entity_type="deal",
+            entity_id=deal.id,
         )
 
     if deal.stage == DealStage.COLD_DEALS and deal.cold_reason is None:
