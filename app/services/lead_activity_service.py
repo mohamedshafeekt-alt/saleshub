@@ -8,11 +8,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.permission_codes import LEADS_DELETE_ANY_ACTIVITY
 from app.models.enums import LeadActivityType
+from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.models.user import User
 from app.schemas.lead_activity import LeadActivityCreate, LeadActivityUpdate
-from app.services.lead_service import get_lead
+from app.services.lead_service import LeadAccessForbiddenError, get_lead
 
 
 class LeadActivityNotFoundError(Exception):
@@ -54,8 +56,10 @@ async def list_lead_activities(
     return list(result.scalars().all())
 
 
-async def _get_activity_or_raise(db: AsyncSession, lead_id: int, activity_id: int, requester: User) -> LeadActivity:
-    await get_lead(db, lead_id, requester)
+async def _get_lead_and_activity_or_raise(
+    db: AsyncSession, lead_id: int, activity_id: int, requester: User
+) -> tuple[Lead, LeadActivity]:
+    lead = await get_lead(db, lead_id, requester)
 
     result = await db.execute(
         select(LeadActivity)
@@ -65,13 +69,15 @@ async def _get_activity_or_raise(db: AsyncSession, lead_id: int, activity_id: in
     activity = result.scalar_one_or_none()
     if activity is None:
         raise LeadActivityNotFoundError(f"Activity not found: {activity_id}")
-    return activity
+    return lead, activity
 
 
 async def update_lead_activity(
     db: AsyncSession, lead_id: int, activity_id: int, data: LeadActivityUpdate, requester: User
 ) -> LeadActivity:
-    activity = await _get_activity_or_raise(db, lead_id, activity_id, requester)
+    lead, activity = await _get_lead_and_activity_or_raise(db, lead_id, activity_id, requester)
+    if lead.owner_id != requester.id:
+        raise LeadAccessForbiddenError(f"Only the lead owner can edit its activities: lead {lead_id}")
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(activity, field, value)
@@ -88,6 +94,9 @@ async def update_lead_activity(
 
 
 async def delete_lead_activity(db: AsyncSession, lead_id: int, activity_id: int, requester: User) -> None:
-    activity = await _get_activity_or_raise(db, lead_id, activity_id, requester)
+    if LEADS_DELETE_ANY_ACTIVITY not in requester.permission_codes:
+        raise LeadAccessForbiddenError(f"Not permitted to delete activities on lead: {lead_id}")
+
+    _, activity = await _get_lead_and_activity_or_raise(db, lead_id, activity_id, requester)
     await db.delete(activity)
     await db.flush()

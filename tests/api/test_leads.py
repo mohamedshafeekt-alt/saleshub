@@ -1007,18 +1007,61 @@ async def test_delete_lead_activity_returns_204_then_404_on_refetch(
     client: AsyncClient, make_user, auth_headers, make_lead
 ):
     owner = await make_user(email="rep-delete-activity@example.com", role=UserRole.SALES_REP)
+    admin = await make_user(email="admin-delete-activity@example.com", role=UserRole.ADMIN)
     lead = await make_lead(owner_id=owner.id, email="delete-activity-lead@example.com")
-    headers = auth_headers(owner)
+    owner_headers = auth_headers(owner)
     created = (
         await client.post(
-            f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "to delete"}, headers=headers
+            f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "to delete"}, headers=owner_headers
         )
     ).json()
 
-    delete_response = await client.delete(f"{LEADS_URL}/{lead.id}/activities/{created['id']}", headers=headers)
+    delete_response = await client.delete(
+        f"{LEADS_URL}/{lead.id}/activities/{created['id']}", headers=auth_headers(admin)
+    )
 
     assert delete_response.status_code == 204
     refetch = await client.patch(
-        f"{LEADS_URL}/{lead.id}/activities/{created['id']}", json={"note": "x"}, headers=headers
+        f"{LEADS_URL}/{lead.id}/activities/{created['id']}", json={"note": "x"}, headers=owner_headers
     )
     assert refetch.status_code == 404
+
+
+async def test_delete_lead_activity_returns_403_for_lead_owner(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-delete-forbidden@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="delete-activity-forbidden-lead@example.com")
+    headers = auth_headers(owner)
+    created = (
+        await client.post(
+            f"{LEADS_URL}/{lead.id}/activities", json={"type": "note", "note": "cannot delete"}, headers=headers
+        )
+    ).json()
+
+    response = await client.delete(f"{LEADS_URL}/{lead.id}/activities/{created['id']}", headers=headers)
+
+    assert response.status_code == 403
+
+
+async def test_update_lead_activity_returns_403_for_non_owner(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-owns-update-activity@example.com", role=UserRole.SALES_REP)
+    admin = await make_user(email="admin-update-activity@example.com", role=UserRole.ADMIN)
+    lead = await make_lead(owner_id=owner.id, email="update-activity-forbidden-lead@example.com")
+    created = (
+        await client.post(
+            f"{LEADS_URL}/{lead.id}/activities",
+            json={"type": "note", "note": "cannot edit"},
+            headers=auth_headers(owner),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"{LEADS_URL}/{lead.id}/activities/{created['id']}",
+        json={"note": "revised"},
+        headers=auth_headers(admin),
+    )
+
+    assert response.status_code == 403

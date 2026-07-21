@@ -114,19 +114,34 @@ async def test_list_lead_activities_raises_not_found_for_missing_lead(db_session
 
 async def test_update_lead_activity_applies_changes_and_stamps_editor(db_session: AsyncSession, make_lead):
     owner = await _make_user(db_session, "owner-update-activity@example.com", UserRole.SALES_REP)
-    editor = await _make_user(db_session, "editor-update-activity@example.com", UserRole.SALES_MANAGER)
     lead = await make_lead(owner_id=owner.id, email="update-activity@example.com")
     activity = LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="original", created_by=owner.id)
     db_session.add(activity)
     await db_session.flush()
 
     updated = await update_lead_activity(
-        db_session, lead.id, activity.id, LeadActivityUpdate(note="revised"), requester=editor
+        db_session, lead.id, activity.id, LeadActivityUpdate(note="revised"), requester=owner
     )
 
     assert updated.note == "revised"
-    assert updated.updated_by == editor.id
+    assert updated.updated_by == owner.id
     assert updated.updated_by_name == "Test"
+
+
+async def test_update_lead_activity_raises_forbidden_for_non_owner(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-update-activity-forbidden@example.com", UserRole.SALES_REP)
+    manager = await _make_user(db_session, "manager-update-activity@example.com", UserRole.SALES_MANAGER)
+    admin = await _make_user(db_session, "admin-update-activity@example.com", UserRole.ADMIN)
+    lead = await make_lead(owner_id=owner.id, email="update-activity-forbidden@example.com")
+    activity = LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="original", created_by=owner.id)
+    db_session.add(activity)
+    await db_session.flush()
+
+    for non_owner in (manager, admin):
+        with pytest.raises(LeadAccessForbiddenError):
+            await update_lead_activity(
+                db_session, lead.id, activity.id, LeadActivityUpdate(note="revised"), requester=non_owner
+            )
 
 
 async def test_update_lead_activity_raises_not_found_for_missing_activity(db_session: AsyncSession, make_lead):
@@ -139,17 +154,31 @@ async def test_update_lead_activity_raises_not_found_for_missing_activity(db_ses
         )
 
 
-async def test_delete_lead_activity_removes_the_row(db_session: AsyncSession, make_lead):
+async def test_delete_lead_activity_removes_the_row_when_requester_is_admin(
+    db_session: AsyncSession, make_lead
+):
     owner = await _make_user(db_session, "owner-delete-activity@example.com", UserRole.SALES_REP)
+    admin = await _make_user(db_session, "admin-delete-activity@example.com", UserRole.ADMIN)
     lead = await make_lead(owner_id=owner.id, email="delete-activity@example.com")
     activity = LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="to delete", created_by=owner.id)
     db_session.add(activity)
     await db_session.flush()
     activity_id = activity.id
 
-    await delete_lead_activity(db_session, lead.id, activity_id, requester=owner)
+    await delete_lead_activity(db_session, lead.id, activity_id, requester=admin)
 
     with pytest.raises(LeadActivityNotFoundError):
         await update_lead_activity(
             db_session, lead.id, activity_id, LeadActivityUpdate(note="x"), requester=owner
         )
+
+
+async def test_delete_lead_activity_raises_forbidden_for_lead_owner(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-delete-activity-forbidden@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="delete-activity-forbidden@example.com")
+    activity = LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="to delete", created_by=owner.id)
+    db_session.add(activity)
+    await db_session.flush()
+
+    with pytest.raises(LeadAccessForbiddenError):
+        await delete_lead_activity(db_session, lead.id, activity.id, requester=owner)
