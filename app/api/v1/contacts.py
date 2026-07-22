@@ -6,14 +6,9 @@ or update a contact together with its account link and is_primary flag."""
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import require_role
-from app.db.session import get_db
-from app.models.user import UserRole
-from app.core.deps import get_current_user
 from app.core.permission_codes import CONTACTS_ACCESS
 from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
-from app.models.user import User
 from app.schemas.contact import ContactCreate, ContactRead, ContactUpdate
 from app.services.contact_service import (
     ContactNotFoundError,

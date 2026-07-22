@@ -23,12 +23,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.enums import DealStage, LeadTier
-from app.models.user import User, UserRole
-from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
-from app.models.enums import LeadTier
 from app.models.user import User
+from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from tests.support.roles import UserRole, role_id_for
-from app.schemas.account import AccountCreate, AccountUpdate
 from app.services.account_service import (
     AccountAccessForbiddenError,
     AccountNotFoundError,

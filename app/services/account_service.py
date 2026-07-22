@@ -11,11 +11,8 @@ from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.deal import Deal
 from app.models.enums import DealStage, LeadTier
-from app.models.user import User, UserRole
-from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
-from app.models.enums import LeadTier
 from app.models.user import User
-from app.schemas.account import AccountCreate, AccountUpdate
+from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from app.services.lead_service import get_lead
 
 _EAGER_LOAD_OPTIONS = (

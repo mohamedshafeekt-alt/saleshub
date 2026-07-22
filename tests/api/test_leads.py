@@ -1028,6 +1028,48 @@ async def test_upload_lead_import_xlsx_creates_leads(client: AsyncClient, make_u
                 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             )
         },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] == 1
+    assert body["errors"] == []
+    leads = await client.get(f"{LEADS_URL}?search=Acme+Corp", headers=headers)
+    created = next(item for item in leads.json()["items"] if item["email"] == "jane.upload.xlsx@acme.com")
+    assert created["owner_id"] == rep.id
+
+
+async def test_upload_lead_import_rejects_bad_extension(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-upload-bad-ext@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        f"{LEADS_URL}/import",
+        headers=headers,
+        files={"file": ("leads.txt", b"not a real file", "text/plain")},
+    )
+
+    assert response.status_code == 400
+
+
+async def test_upload_lead_import_rejects_corrupt_xlsx_content(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-upload-corrupt@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        f"{LEADS_URL}/import",
+        headers=headers,
+        files={
+            "file": (
+                "leads.xlsx",
+                b"not actually an xlsx file",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 400
+
 async def test_list_lead_activities_returns_200_filtered_by_type(
     client: AsyncClient, make_user, auth_headers, make_lead
 ):
@@ -1080,43 +1122,6 @@ async def test_update_lead_activity_returns_200(client: AsyncClient, make_user, 
 
     assert response.status_code == 200
     body = response.json()
-    assert body["created"] == 1
-    assert body["errors"] == []
-    leads = await client.get(f"{LEADS_URL}?search=Acme+Corp", headers=headers)
-    created = next(item for item in leads.json()["items"] if item["email"] == "jane.upload.xlsx@acme.com")
-    assert created["owner_id"] == rep.id
-
-
-async def test_upload_lead_import_rejects_bad_extension(client: AsyncClient, make_user, auth_headers):
-    rep = await make_user(email="rep-upload-bad-ext@example.com", role=UserRole.SALES_REP)
-    headers = auth_headers(rep)
-
-    response = await client.post(
-        f"{LEADS_URL}/import",
-        headers=headers,
-        files={"file": ("leads.txt", b"not a real file", "text/plain")},
-    )
-
-    assert response.status_code == 400
-
-
-async def test_upload_lead_import_rejects_corrupt_xlsx_content(client: AsyncClient, make_user, auth_headers):
-    rep = await make_user(email="rep-upload-corrupt@example.com", role=UserRole.SALES_REP)
-    headers = auth_headers(rep)
-
-    response = await client.post(
-        f"{LEADS_URL}/import",
-        headers=headers,
-        files={
-            "file": (
-                "leads.xlsx",
-                b"not actually an xlsx file",
-                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            )
-        },
-    )
-
-    assert response.status_code == 400
     assert body["note"] == "revised"
     assert body["updated_by"] == owner.id
     assert body["updated_by_name"]

@@ -16,16 +16,14 @@ from app.models.user import User
 from app.schemas.account import AccountRead
 from app.schemas.generic_response import Page
 from app.schemas.lead import LeadConvertRequest, LeadDetailRead, LeadRead, LeadUpsert
-from app.schemas.lead_activity import LeadActivityCreate, LeadActivityRead
-from app.schemas.lead_import import LeadImportResult
 from app.schemas.lead_activity import LeadActivityCreate, LeadActivityDetailRead, LeadActivityRead, LeadActivityUpdate
+from app.schemas.lead_import import LeadImportResult
 from app.services.account_service import (
     LeadAlreadyConvertedError,
     LeadMissingFieldsForConversionError,
     convert_lead_to_account,
 )
 from app.services.email.sender import EmailSender
-from app.services.lead_activity_service import create_lead_activity
 from app.services.lead_import_service import LeadImportFileError, build_lead_import_template, import_leads
 from app.services.lead_activity_service import (
     LeadActivityNotFoundError,
@@ -48,13 +46,6 @@ from app.services.lead_service import (
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _CSV_MEDIA_TYPE = "text/csv"
 
-router = APIRouter(
-    prefix="/leads",
-    tags=["leads"],
-    dependencies=[
-        Depends(require_role(UserRole.SALES_REP, UserRole.DELIVERY_SME, UserRole.SALES_MANAGER, UserRole.ADMIN))
-    ],
-)
 router = APIRouter(prefix="/leads", tags=["leads"])
 
 

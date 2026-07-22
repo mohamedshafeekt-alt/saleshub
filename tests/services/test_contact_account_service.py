@@ -18,8 +18,9 @@ import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.enums import LeadTier
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.contact_account import AccountContactUpsert
+from tests.support.roles import UserRole, role_id_for
 from app.services.account_service import (
     AccountAccessForbiddenError,
     AccountNotFoundError,
@@ -36,7 +37,12 @@ from app.services.contact_account_service import (
 async def _make_user(
     db_session: AsyncSession, email: str, role: UserRole, first_name: str = "Test"
 ) -> User:
-    user = User(email=email, hashed_password="x", first_name=first_name, role=role)
+    user = User(
+        email=email,
+        hashed_password="x",
+        first_name=first_name,
+        role_id=await role_id_for(db_session, role),
+    )
     db_session.add(user)
     await db_session.flush()
     return user

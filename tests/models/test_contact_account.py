@@ -17,11 +17,17 @@ from app.models.account import Account
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.enums import LeadTier
-from app.models.user import User, UserRole
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
 
 
 async def _make_owner(db_session: AsyncSession, email: str = "owner-ca@example.com") -> User:
-    owner = User(email=email, hashed_password="x", first_name="Owner", role=UserRole.SALES_REP)
+    owner = User(
+        email=email,
+        hashed_password="x",
+        first_name="Owner",
+        role_id=await role_id_for(db_session, UserRole.SALES_REP),
+    )
     db_session.add(owner)
     await db_session.flush()
     return owner

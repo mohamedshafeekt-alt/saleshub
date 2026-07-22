@@ -21,13 +21,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.lead import Lead
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.services.lead_import_service import (
     IMPORT_COLUMNS,
     LeadImportFileError,
     build_lead_import_template,
     import_leads,
 )
+from tests.support.roles import UserRole, role_id_for
 
 
 class FakeEmailSender:
@@ -39,7 +40,7 @@ class FakeEmailSender:
 
 
 async def _make_user(db_session: AsyncSession, email: str, role: UserRole = UserRole.SALES_REP) -> User:
-    user = User(email=email, hashed_password="x", first_name="Test", role=role)
+    user = User(email=email, hashed_password="x", first_name="Test", role_id=await role_id_for(db_session, role))
     db_session.add(user)
     await db_session.flush()
     return user

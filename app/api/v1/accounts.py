@@ -9,12 +9,9 @@ from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.contact import Contact
 from app.models.enums import LeadTier
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.account import AccountCreate, AccountOverviewRead, AccountRead, AccountUpdate
 from app.schemas.contact_account import AccountContactRead, AccountContactUpsert
-from app.models.user import User
-from app.schemas.account import AccountCreate, AccountRead, AccountUpdate
-from app.schemas.contact import ContactRead
 from app.schemas.deal import DealRead
 from app.schemas.generic_response import Page
 from app.services.account_service import (
