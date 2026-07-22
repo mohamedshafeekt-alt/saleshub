@@ -6,7 +6,18 @@ from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
-from app.api.v1 import accounts, auth, contacts, deals, leads, notifications, permissions, roles, users
+from app.api.v1 import (
+    accounts,
+    auth,
+    contacts,
+    deals,
+    leads,
+    notifications,
+    permissions,
+    roles,
+    search,
+    users,
+)
 from app.core.error_handler import register_error_handlers
 from app.core.logging import configure_logging
 from app.core.deps import bearer_scheme
@@ -45,3 +56,4 @@ app.include_router(deals.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(permissions.router, prefix="/api/v1")
 app.include_router(roles.router, prefix="/api/v1")
+app.include_router(search.router, prefix="/api/v1")
