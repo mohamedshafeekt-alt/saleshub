@@ -1,13 +1,15 @@
-"""Contact CRUD, access-gated via the parent Account."""
+"""Standalone Contact CRUD -- role-gated only (Contact has no owner_id and
+no single owning account; see contact_service.py's module docstring). Use
+POST/PUT /accounts/{account_id}/contacts (app/api/v1/accounts.py) to create
+or update a contact together with its account link and is_primary flag."""
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, require_role
+from app.core.deps import require_role
 from app.db.session import get_db
-from app.models.user import User, UserRole
+from app.models.user import UserRole
 from app.schemas.contact import ContactCreate, ContactRead, ContactUpdate
-from app.services.account_service import AccountAccessForbiddenError, AccountNotFoundError
 from app.services.contact_service import (
     ContactNotFoundError,
     create_contact,
@@ -26,16 +28,9 @@ router = APIRouter(
 @router.post("", response_model=ContactRead, status_code=status.HTTP_201_CREATED)
 async def create_contact_route(
     data: ContactCreate,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactRead:
-    try:
-        contact = await create_contact(db, data, requester=current_user)
-    except AccountNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except AccountAccessForbiddenError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
-
+    contact = await create_contact(db, data)
     await db.commit()
     return ContactRead.model_validate(contact)
 
@@ -43,15 +38,12 @@ async def create_contact_route(
 @router.get("/{contact_id}", response_model=ContactRead)
 async def get_contact_route(
     contact_id: int,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactRead:
     try:
-        contact = await get_contact(db, contact_id, requester=current_user)
+        contact = await get_contact(db, contact_id)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except AccountAccessForbiddenError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     return ContactRead.model_validate(contact)
 
@@ -60,15 +52,12 @@ async def get_contact_route(
 async def update_contact_route(
     contact_id: int,
     data: ContactUpdate,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactRead:
     try:
-        contact = await update_contact(db, contact_id, data, requester=current_user)
+        contact = await update_contact(db, contact_id, data)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except AccountAccessForbiddenError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     await db.commit()
     return ContactRead.model_validate(contact)
@@ -77,14 +66,11 @@ async def update_contact_route(
 @router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_contact_route(
     contact_id: int,
-    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     try:
-        await delete_contact(db, contact_id, requester=current_user)
+        await delete_contact(db, contact_id)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    except AccountAccessForbiddenError as exc:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     await db.commit()

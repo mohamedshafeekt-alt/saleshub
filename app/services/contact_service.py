@@ -1,70 +1,45 @@
-"""Contact business logic: ownership-checked CRUD scoped via the parent Account.
+"""Contact business logic: plain CRUD on the standalone Contact entity.
 
-Contact has no owner_id of its own — access control is delegated entirely to
-the parent Account via account_service.get_account, whose AccountNotFoundError
-/ AccountAccessForbiddenError propagate unchanged (mirrors how
-account_service.convert_lead_to_account reuses lead_service.get_lead's
-exceptions without wrapping them).
+Contact has no owner_id and, as of the contact_accounts refactor, no single
+owning Account either (a Contact can be linked to more than one Account) --
+there is no coherent single account to gate access against anymore, so these
+operations are role-gated only (via the router's require_role dependency),
+not ownership-scoped. Account-scoped contact creation/update (with the
+is_primary flag) lives in contact_account_service.py instead.
 """
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
-from app.models.user import User
 from app.schemas.contact import ContactCreate, ContactUpdate
-from app.services.account_service import get_account
 
 
 class ContactNotFoundError(Exception):
     """Raised when a contact id does not exist."""
 
 
-async def create_contact(db: AsyncSession, data: ContactCreate, requester: User) -> Contact:
-    await get_account(db, data.account_id, requester)
-
+async def create_contact(db: AsyncSession, data: ContactCreate) -> Contact:
     contact = Contact(**data.model_dump())
     db.add(contact)
     await db.flush()
     return contact
 
 
-async def list_contacts_for_account(
-    db: AsyncSession, account_id: int, requester: User, *, limit: int = 20, offset: int = 0
-) -> tuple[list[Contact], int]:
-    await get_account(db, account_id, requester)
-
-    total = (
-        await db.execute(select(func.count(Contact.id)).where(Contact.account_id == account_id))
-    ).scalar_one()
-    query = (
-        select(Contact)
-        .where(Contact.account_id == account_id)
-        .order_by(Contact.created_at)
-        .limit(limit)
-        .offset(offset)
-    )
-    items = list((await db.execute(query)).scalars().all())
-    return items, total
-
-
-async def _get_contact_or_raise(db: AsyncSession, contact_id: int, requester: User) -> Contact:
+async def _get_contact_or_raise(db: AsyncSession, contact_id: int) -> Contact:
     result = await db.execute(select(Contact).where(Contact.id == contact_id))
     contact = result.scalar_one_or_none()
     if contact is None:
         raise ContactNotFoundError(f"Contact not found: {contact_id}")
-    await get_account(db, contact.account_id, requester)
     return contact
 
 
-async def get_contact(db: AsyncSession, contact_id: int, requester: User) -> Contact:
-    return await _get_contact_or_raise(db, contact_id, requester)
+async def get_contact(db: AsyncSession, contact_id: int) -> Contact:
+    return await _get_contact_or_raise(db, contact_id)
 
 
-async def update_contact(
-    db: AsyncSession, contact_id: int, data: ContactUpdate, requester: User
-) -> Contact:
-    contact = await _get_contact_or_raise(db, contact_id, requester)
+async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate) -> Contact:
+    contact = await _get_contact_or_raise(db, contact_id)
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(contact, field, value)
@@ -73,7 +48,7 @@ async def update_contact(
     return contact
 
 
-async def delete_contact(db: AsyncSession, contact_id: int, requester: User) -> None:
-    contact = await _get_contact_or_raise(db, contact_id, requester)
+async def delete_contact(db: AsyncSession, contact_id: int) -> None:
+    contact = await _get_contact_or_raise(db, contact_id)
     await db.delete(contact)
     await db.flush()

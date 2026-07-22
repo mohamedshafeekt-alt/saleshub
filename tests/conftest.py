@@ -203,12 +203,14 @@ async def make_account(db_session: AsyncSession):
 async def make_contact(db_session: AsyncSession):
     """Factory fixture: await make_contact(account_id=..., first_name=..., ...) -> Contact.
 
-    Constructs the ORM Contact directly (bypassing create_contact/ContactCreate)
-    so service/API tests can set up fixture data without going through the
-    thing under test. Mirrors make_account's style.
+    Constructs the ORM Contact directly (bypassing create_contact/ContactCreate),
+    plus the ContactAccount row linking it to account_id (is_primary=False
+    unless overridden), so service/API tests can set up fixture data without
+    going through the thing under test. Mirrors make_account's style.
     """
 
     from app.models.contact import Contact
+    from app.models.contact_account import ContactAccount
 
     async def _make_contact(
         account_id: int,
@@ -217,6 +219,7 @@ async def make_contact(db_session: AsyncSession):
         email: str | None = None,
         phone: str | None = None,
         job_title: str | None = None,
+        is_primary: bool = False,
         **kwargs,
     ):
         contact = Contact(
@@ -225,10 +228,13 @@ async def make_contact(db_session: AsyncSession):
             email=email,
             phone=phone,
             job_title=job_title,
-            account_id=account_id,
             **kwargs,
         )
         db_session.add(contact)
+        await db_session.flush()
+        db_session.add(
+            ContactAccount(contact_id=contact.id, account_id=account_id, is_primary=is_primary)
+        )
         await db_session.flush()
         await db_session.commit()
         return contact
