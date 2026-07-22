@@ -50,12 +50,18 @@ _(updated after every feature — do not batch these)_
 - [x] Paginated list responses — `GET /api/v1/leads`, `/api/v1/accounts`, `/api/v1/deals`, and `/api/v1/accounts/{id}/contacts` now return `{items, total, limit, offset}` instead of a bare array, so the frontend can render "1-25 of N" without a second request
 - [x] CORS middleware (`app/main.py`) — wildcard origins for now (safe: auth is a Bearer token, not a cookie, so no `allow_credentials` needed); without this, browsers/Flutter-web got a 404/405 on the `OPTIONS` preflight before ever reaching a route
 - [x] Refresh tokens + logout — `POST /api/v1/auth/login` now also returns a `refresh_token` (opaque, DB-backed via new `refresh_tokens` table, 30-day expiry by default); `POST /api/v1/auth/refresh` exchanges it for a new access token (no rotation — same refresh token reused until logout/expiry); `POST /api/v1/auth/logout` (authenticated) revokes the caller's own refresh token, idempotently
+- [x] Fixed `DELETE /api/v1/leads/{id}` 400 when a lead had activities/contacts — `Lead.contacts`/`Lead.activities` relationships now use `passive_deletes=True` so the ORM defers to the FK's existing `ON DELETE CASCADE` instead of trying to null the (`NOT NULL`) `lead_id` column itself
+- [x] Profile self-service — `GET/PATCH /api/v1/users/me` (name/phone, email not editable here), `POST /api/v1/users/me/password` (current-password verified), `POST /api/v1/users/me/avatar` (image/png or image/jpeg, saved to local disk under `media/avatars/`, served via `/media` static mount); `User` gained `phone_number`/`avatar_url`/`last_login_at`, the last one stamped on every successful login
+- [x] Swagger's Authorize button/padlocks now work — `app/core/deps.py` adds an `HTTPBearer` scheme so FastAPI's OpenAPI generator registers a security scheme, wired globally alongside `enforce_rbac` in `app/main.py`; real auth is still done entirely by `rbac_middleware`, this only makes the token show up in `/docs`
+- [x] `POST /api/v1/users` reactivates a soft-deleted user instead of failing "Email already exists" — same email on a previously deleted row now overwrites name/role and reissues a generated password on that same user id (preserves history); a still-active duplicate email still 409s as before
+- [x] Notifications: in-app bell/panel backed by `GET/PATCH/POST/DELETE /api/v1/notifications` (list with `unread_only`/`type` filters, `unread-count`, mark-one-read, mark-all/bulk-read, bulk soft-delete) — populated on new-lead creation (same `LEADS_NOTIFY_ON_CREATE`-permission recipients as the existing admin email), lead reassignment, and deal stage changes, plus a `task_overdue` entry computed at read time from `Lead.next_follow_up_date` (no new Task entity, no scheduler); polling-based, no real-time push, no email mirroring
+- [x] Global search — `GET /api/v1/search?q=` (auth-only, no specific permission gate) matches by name across Leads (first/last name), Accounts (company), Deals (deal name), and Contacts (first/last name); each result is `{id, label, name}` (`label` is the entity type), capped at 5 per type
 - [ ] Static Pre-Sales Checklist per deal
 - [ ] Activity log for Account/Deal (Lead's is done; a generic cross-entity log is still open)
-- [ ] Notifications (task overdue, stage transition)
 - [ ] Dashboard aggregation endpoints (funnel, target vs actual)
 
 ## Milestones (per Phase 1 kickoff)
 - **Week 1** — Login, RBAC, Lead Management, Navigation
 - **Week 2** — Accounts, Contacts, Deals, Activities, Notifications
 - **Week 3** — Dashboard, QA/UAT, optimization, deployment
+m

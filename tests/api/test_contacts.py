@@ -11,7 +11,7 @@ existing contact (access is gated via the contact's parent account).
 
 from httpx import AsyncClient
 
-from app.models.user import UserRole
+from tests.support.roles import UserRole
 
 CONTACTS_URL = "/api/v1/contacts"
 ACCOUNTS_URL = "/api/v1/accounts"

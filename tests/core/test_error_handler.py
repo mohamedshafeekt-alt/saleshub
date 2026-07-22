@@ -25,6 +25,7 @@ async def error_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
     from fastapi import HTTPException
     from sqlalchemy.exc import SQLAlchemyError
 
+    from app.core.rbac import public
     from app.db.session import get_db
     from app.main import app
 
@@ -36,14 +37,17 @@ async def error_client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, 
     routes_before = list(app.router.routes)
 
     @app.get("/__test__/raise-sqlalchemy-error")
+    @public
     async def _raise_sqlalchemy_error() -> None:
         raise SQLAlchemyError("boom")
 
     @app.get("/__test__/raise-unhandled-exception")
+    @public
     async def _raise_unhandled_exception() -> None:
         raise Exception("boom")
 
     @app.get("/__test__/raise-http-exception")
+    @public
     async def _raise_http_exception() -> None:
         raise HTTPException(status_code=403, detail="nope")
 

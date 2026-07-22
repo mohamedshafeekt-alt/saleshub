@@ -10,3 +10,5 @@ class Base(DeclarativeBase):
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    is_active: Mapped[bool] = mapped_column(nullable=False, default=True, server_default="true")
+    is_delete: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")

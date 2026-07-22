@@ -4,9 +4,10 @@ get/update/delete, and Lead -> Account conversion."""
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.permission_codes import ACCOUNTS_VIEW_ALL
 from app.models.account import Account
 from app.models.enums import LeadTier
-from app.models.user import User, UserRole
+from app.models.user import User
 from app.schemas.account import AccountCreate, AccountUpdate
 from app.services.lead_service import get_lead
 
@@ -44,7 +45,7 @@ async def list_accounts(
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[Account], int]:
-    if requester.role == UserRole.SALES_REP:
+    if ACCOUNTS_VIEW_ALL not in requester.permission_codes:
         owner_id = requester.id
 
     filters = []
@@ -81,7 +82,7 @@ async def _get_account_or_raise(db: AsyncSession, account_id: int, requester: Us
     account = result.scalar_one_or_none()
     if account is None:
         raise AccountNotFoundError(f"Account not found: {account_id}")
-    if requester.role == UserRole.SALES_REP and account.owner_id != requester.id:
+    if ACCOUNTS_VIEW_ALL not in requester.permission_codes and account.owner_id != requester.id:
         raise AccountAccessForbiddenError(f"Not permitted to access account: {account_id}")
     return account
 

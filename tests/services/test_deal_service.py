@@ -16,10 +16,12 @@ through the ACCOUNT's ownership rather than individual deal ownership.
 """
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import DealStage
-from app.models.user import User, UserRole
+from app.models.enums import DealStage, NotificationType
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountAccessForbiddenError, AccountNotFoundError
 from app.services.deal_service import (
@@ -39,9 +41,10 @@ from app.services.deal_service import (
 async def _make_user(
     db_session: AsyncSession, email: str, role: UserRole, first_name: str = "Test"
 ) -> User:
-    user = User(email=email, hashed_password="x", first_name=first_name, role=role)
+    user = User(email=email, hashed_password="x", first_name=first_name, role_id=await role_id_for(db_session, role))
     db_session.add(user)
     await db_session.flush()
+    await db_session.refresh(user, attribute_names=["role"])
     return user
 
 
@@ -354,6 +357,31 @@ async def test_update_deal_writes_stage_history_row_on_stage_change(
     assert history[0].to_stage == DealStage.QUALIFIED_TO_BUY
     assert history[0].changed_by == owner.id
     assert history[0].note == "Qualified after call"
+
+
+async def test_update_deal_stage_change_notifies_owner(db_session: AsyncSession, make_account, make_deal):
+    from app.models.notification import Notification
+
+    owner = await _make_user(db_session, "owner-notif-deal@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Notify Deal Co")
+    deal = await make_deal(
+        account_id=account.id,
+        owner_id=owner.id,
+        deal_name="Notify Deal",
+        stage=DealStage.RECEIVED_REQUIREMENTS,
+    )
+
+    await update_deal(
+        db_session, deal_id=deal.id, data=DealUpdate(stage=DealStage.QUALIFIED_TO_BUY), requester=owner
+    )
+
+    result = await db_session.execute(
+        select(Notification).where(
+            Notification.recipient_id == owner.id, Notification.type == NotificationType.DEAL_STAGE_CHANGED
+        )
+    )
+    notification = result.scalar_one()
+    assert notification.entity_id == deal.id
 
 
 async def test_update_deal_does_not_write_stage_history_when_stage_absent_from_payload(
