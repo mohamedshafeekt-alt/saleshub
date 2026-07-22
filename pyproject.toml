@@ -10,6 +10,7 @@ dependencies = [
     "bcrypt>=4.0,<4.1",
     "email-validator>=2.0",
     "fastapi>=0.139.0",
+    "openpyxl>=3.1.5",
     "passlib[bcrypt]>=1.7.4",
     "pydantic>=2.13.4",
     "pydantic-settings>=2.14.2",
@@ -27,6 +28,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.21",
+    "types-openpyxl>=3.1.5.20260117",
     "types-passlib>=1.7.7.20260211",
     "types-python-jose>=3.5.0.20260408",
 ]

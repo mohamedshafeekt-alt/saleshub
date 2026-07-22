@@ -4,7 +4,9 @@ Covers: 201 create / 200 update as each allowed role (single POST route,
 dispatched on whether `id` is present in the body), 409 duplicate email, 422
 missing required field, 401 no auth, 403 for Delivery SME (list + create) and
 for a non-owning Sales Rep (get/update/delete), 200 list scoped by role and by
-each filter (owner_id/source/search), 404 for a missing lead, 204 DELETE.
+each filter (owner_id/source/search), 404 for a missing lead, 204 DELETE,
+bulk import template download (xlsx/csv) and file upload (xlsx/csv, plus a
+rejected non-spreadsheet extension).
 """
 
 import pytest_asyncio
@@ -930,6 +932,143 @@ async def test_create_lead_activity_empty_note_returns_422(
 
     assert response.status_code == 422
 
+
+async def test_download_lead_import_template_xlsx(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-template-xlsx@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(f"{LEADS_URL}/import/template?format=xlsx", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
+    assert "attachment" in response.headers["content-disposition"]
+
+
+async def test_download_lead_import_template_csv(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-template-csv@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(f"{LEADS_URL}/import/template?format=csv", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/csv")
+    assert "attachment" in response.headers["content-disposition"]
+
+
+async def test_download_lead_import_template_defaults_to_xlsx(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-template-default@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(f"{LEADS_URL}/import/template", headers=headers)
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/vnd.openxmlformats")
+
+
+async def test_upload_lead_import_csv_creates_leads(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-upload-csv@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+    csv_content = (
+        b"first_name,last_name,company,domain,job_title,linkedin_url,email,phone,"
+        b"source,status,follow_up_note\n"
+        b"Jane,Doe,Acme Corp,acme.com,VP,linkedin.com/in/jane,jane.upload.csv@acme.com,"
+        b"+1 555 0000,website,,\n"
+    )
+
+    response = await client.post(
+        f"{LEADS_URL}/import",
+        headers=headers,
+        files={"file": ("leads.csv", csv_content, "text/csv")},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] == 1
+    assert body["errors"] == []
+    leads = await client.get(f"{LEADS_URL}?search=Acme+Corp", headers=headers)
+    created = next(item for item in leads.json()["items"] if item["email"] == "jane.upload.csv@acme.com")
+    assert created["owner_id"] == rep.id
+
+
+async def test_upload_lead_import_xlsx_creates_leads(client: AsyncClient, make_user, auth_headers):
+    import io
+
+    from openpyxl import Workbook
+
+    rep = await make_user(email="rep-upload-xlsx@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+    workbook = Workbook()
+    sheet = workbook.active
+    sheet.append(
+        [
+            "first_name",
+            "last_name",
+            "company",
+            "domain",
+            "job_title",
+            "linkedin_url",
+            "email",
+            "phone",
+            "source",
+            "status",
+            "follow_up_note",
+        ]
+    )
+    sheet.append(["Jane", "Doe", "Acme Corp", "acme.com", "VP", "", "jane.upload.xlsx@acme.com", "", "website", "", ""])
+    buffer = io.BytesIO()
+    workbook.save(buffer)
+
+    response = await client.post(
+        f"{LEADS_URL}/import",
+        headers=headers,
+        files={
+            "file": (
+                "leads.xlsx",
+                buffer.getvalue(),
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["created"] == 1
+    assert body["errors"] == []
+    leads = await client.get(f"{LEADS_URL}?search=Acme+Corp", headers=headers)
+    created = next(item for item in leads.json()["items"] if item["email"] == "jane.upload.xlsx@acme.com")
+    assert created["owner_id"] == rep.id
+
+
+async def test_upload_lead_import_rejects_bad_extension(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-upload-bad-ext@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        f"{LEADS_URL}/import",
+        headers=headers,
+        files={"file": ("leads.txt", b"not a real file", "text/plain")},
+    )
+
+    assert response.status_code == 400
+
+
+async def test_upload_lead_import_rejects_corrupt_xlsx_content(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-upload-corrupt@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        f"{LEADS_URL}/import",
+        headers=headers,
+        files={
+            "file": (
+                "leads.xlsx",
+                b"not actually an xlsx file",
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            )
+        },
+    )
+
+    assert response.status_code == 400
 
 async def test_list_lead_activities_returns_200_filtered_by_type(
     client: AsyncClient, make_user, auth_headers, make_lead

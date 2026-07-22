@@ -1,6 +1,8 @@
 """Lead create-or-update (single route) + role-scoped list/search."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_email_sender
@@ -15,12 +17,14 @@ from app.schemas.account import AccountRead
 from app.schemas.generic_response import Page
 from app.schemas.lead import LeadConvertRequest, LeadDetailRead, LeadRead, LeadUpsert
 from app.schemas.lead_activity import LeadActivityCreate, LeadActivityDetailRead, LeadActivityRead, LeadActivityUpdate
+from app.schemas.lead_import import LeadImportResult
 from app.services.account_service import (
     LeadAlreadyConvertedError,
     LeadMissingFieldsForConversionError,
     convert_lead_to_account,
 )
 from app.services.email.sender import EmailSender
+from app.services.lead_import_service import LeadImportFileError, build_lead_import_template, import_leads
 from app.services.lead_activity_service import (
     LeadActivityNotFoundError,
     create_lead_activity,
@@ -38,6 +42,9 @@ from app.services.lead_service import (
     list_leads,
     update_lead,
 )
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_CSV_MEDIA_TYPE = "text/csv"
 
 router = APIRouter(prefix="/leads", tags=["leads"])
 
@@ -92,6 +99,38 @@ async def list_leads_route(
     return Page[LeadRead](
         items=[LeadRead.model_validate(lead) for lead in leads], total=total, limit=limit, offset=offset
     )
+
+
+@router.get("/import/template")
+async def download_lead_import_template_route(
+    file_format: Literal["xlsx", "csv"] = Query("xlsx", alias="format"),
+) -> Response:
+    content = build_lead_import_template(file_format)
+    media_type = _XLSX_MEDIA_TYPE if file_format == "xlsx" else _CSV_MEDIA_TYPE
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="lead_import_template.{file_format}"'},
+    )
+
+
+@router.post("/import", response_model=LeadImportResult)
+async def import_leads_route(
+    file: UploadFile,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    email_sender: EmailSender = Depends(get_email_sender),
+) -> LeadImportResult:
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".csv")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be .xlsx or .csv")
+
+    content = await file.read()
+    try:
+        # import_leads commits each successful row itself (see its module
+        # docstring), so there's nothing left pending to commit here.
+        return await import_leads(db, content, file.filename, current_user, email_sender)
+    except LeadImportFileError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{lead_id}", response_model=LeadDetailRead)

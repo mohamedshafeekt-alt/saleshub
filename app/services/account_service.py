@@ -3,13 +3,25 @@ get/update/delete, and Lead -> Account conversion."""
 
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.permission_codes import ACCOUNTS_VIEW_ALL
 from app.models.account import Account
-from app.models.enums import LeadTier
+from app.models.contact import Contact
+from app.models.contact_account import ContactAccount
+from app.models.deal import Deal
+from app.models.enums import DealStage, LeadTier
 from app.models.user import User
-from app.schemas.account import AccountCreate, AccountUpdate
+from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from app.services.lead_service import get_lead
+
+_EAGER_LOAD_OPTIONS = (
+    selectinload(Account.owner),
+    selectinload(Account.contact_accounts).selectinload(ContactAccount.contact),
+    selectinload(Account.deals),
+)
+
+_CLOSED_DEAL_STAGES = {DealStage.CLOSED_WON, DealStage.CLOSED_LOST, DealStage.COLD_DEALS}
 
 
 class AccountNotFoundError(Exception):
@@ -28,10 +40,76 @@ class LeadMissingFieldsForConversionError(Exception):
     """Raised when a lead has no tier and/or owner and none was supplied at conversion time."""
 
 
+class PrimaryContactAlreadyExistsError(Exception):
+    """Raised when trying to mark a contact primary for an account that already has one.
+
+    Deliberately NOT auto-demoting the existing primary contact -- the
+    caller must explicitly unset the old one first.
+    """
+
+
+async def account_has_primary_contact(db: AsyncSession, account_id: int) -> bool:
+    result = await db.execute(
+        select(ContactAccount.id).where(
+            ContactAccount.account_id == account_id, ContactAccount.is_primary.is_(True)
+        )
+    )
+    return result.scalar_one_or_none() is not None
+
+
+async def _add_contacts(db: AsyncSession, account_id: int, contacts: list[AccountContactInput]) -> None:
+    """contacts[0]'s first_name/last_name is required (enforced by the
+    AccountCreate/AccountUpdate validator) and back-fills any later contact
+    that omits its own, since Contact.first_name is NOT NULL.
+
+    Checked up front rather than relying on the DB's partial-unique-index +
+    IntegrityError rollback: this runs after the Account itself may already
+    be flushed in the same transaction (create_account), and rolling back on
+    conflict would undo that too, not just this call's own inserts.
+    """
+    if not contacts:
+        return
+
+    if sum(contact.is_primary for contact in contacts) > 1:
+        raise PrimaryContactAlreadyExistsError(
+            "Only one contact per request can be marked primary"
+        )
+    if any(contact.is_primary for contact in contacts) and await account_has_primary_contact(
+        db, account_id
+    ):
+        raise PrimaryContactAlreadyExistsError(f"Account {account_id} already has a primary contact")
+
+    first_name = contacts[0].first_name
+    last_name = contacts[0].last_name
+
+    new_contacts = []
+    for contact in contacts:
+        row = Contact(
+            first_name=contact.first_name or first_name,
+            last_name=contact.last_name if contact.first_name else last_name,
+            email=contact.email,
+            phone=contact.phone,
+            job_title=contact.job_title,
+        )
+        db.add(row)
+        new_contacts.append((row, contact.is_primary))
+
+    await db.flush()  # assigns ids to the new Contact rows
+
+    for contact_row, is_primary in new_contacts:
+        db.add(ContactAccount(contact_id=contact_row.id, account_id=account_id, is_primary=is_primary))
+
+
 async def create_account(db: AsyncSession, data: AccountCreate) -> Account:
-    account = Account(**data.model_dump())
+    account = Account(**data.model_dump(exclude={"contacts"}))
     db.add(account)
     await db.flush()
+
+    await _add_contacts(db, account.id, data.contacts)
+    if data.contacts:
+        await db.flush()
+
+    await db.refresh(account, attribute_names=["owner", "contact_accounts", "deals"])
     return account
 
 
@@ -41,6 +119,7 @@ async def list_accounts(
     requester: User,
     owner_id: int | None = None,
     tier: LeadTier | None = None,
+    industry: str | None = None,
     search: str | None = None,
     limit: int = 20,
     offset: int = 0,
@@ -53,18 +132,21 @@ async def list_accounts(
         filters.append(Account.owner_id == owner_id)
     if tier is not None:
         filters.append(Account.tier == tier)
+    if industry is not None:
+        filters.append(Account.industry == industry)
     if search is not None:
         pattern = f"%{search}%"
         filters.append(
             or_(
                 Account.company.ilike(pattern),
+                Account.domain.ilike(pattern),
                 User.first_name.ilike(pattern),
                 User.last_name.ilike(pattern),
             )
         )
 
     count_query = select(func.count(Account.id))
-    items_query = select(Account)
+    items_query = select(Account).options(*_EAGER_LOAD_OPTIONS)
     if search is not None:
         count_query = count_query.join(User, Account.owner_id == User.id)
         items_query = items_query.join(User, Account.owner_id == User.id)
@@ -78,7 +160,9 @@ async def list_accounts(
 
 
 async def _get_account_or_raise(db: AsyncSession, account_id: int, requester: User) -> Account:
-    result = await db.execute(select(Account).where(Account.id == account_id))
+    result = await db.execute(
+        select(Account).where(Account.id == account_id).options(*_EAGER_LOAD_OPTIONS)
+    )
     account = result.scalar_one_or_none()
     if account is None:
         raise AccountNotFoundError(f"Account not found: {account_id}")
@@ -94,11 +178,36 @@ async def get_account(db: AsyncSession, account_id: int, requester: User) -> Acc
 async def update_account(db: AsyncSession, account_id: int, data: AccountUpdate, requester: User) -> Account:
     account = await _get_account_or_raise(db, account_id, requester)
 
-    for field, value in data.model_dump(exclude_unset=True).items():
+    for field, value in data.model_dump(exclude_unset=True, exclude={"contacts"}).items():
         setattr(account, field, value)
 
+    await _add_contacts(db, account.id, data.contacts)
+
     await db.flush()
+    refresh_attrs = []
+    if data.owner_id is not None:
+        # owner was already eagerly loaded in _get_account_or_raise, but for
+        # the *old* owner_id -- refresh so owner_name reflects the new owner.
+        refresh_attrs.append("owner")
+    if data.contacts:
+        refresh_attrs.append("contact_accounts")
+    if refresh_attrs:
+        await db.refresh(account, attribute_names=refresh_attrs)
     return account
+
+
+async def get_account_overview(
+    db: AsyncSession, account_id: int, requester: User
+) -> tuple[Account, list[Deal], float]:
+    """Account Information + Key Contacts + Active Deals for the Overview
+    screen. active_deals excludes closed/cold stages; open_deal_value is
+    their value summed. Pre-Sales Checklist / Last Activity / Next Step /
+    Total ARR have no backing model yet, so they aren't computed here --
+    the route fills those with null."""
+    account = await _get_account_or_raise(db, account_id, requester)
+    active_deals = [deal for deal in account.deals if deal.stage not in _CLOSED_DEAL_STAGES]
+    open_deal_value = sum((deal.value or 0) for deal in active_deals)
+    return account, active_deals, open_deal_value
 
 
 async def delete_account(db: AsyncSession, account_id: int, requester: User) -> None:
@@ -141,4 +250,5 @@ async def convert_lead_to_account(
     db.add(account)
     lead.is_converted = True
     await db.flush()
+    await db.refresh(account, attribute_names=["owner", "contact_accounts", "deals"])
     return account

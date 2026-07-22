@@ -1,14 +1,17 @@
 """app.models.contact: Contact ORM model construction + constraints.
 
-Covers: construction with all fields persists and round-trips; created_at/
-updated_at present via Base inheritance; first_name and account_id are
-NOT NULL (required).
+Covers: construction with all fields (including linkedin_url/alternate_phone)
+persists and round-trips; created_at/updated_at present via Base
+inheritance; first_name is NOT NULL (required); Contact has no account_id of
+its own -- association with an Account goes through ContactAccount (see
+tests/models/test_contact_account.py).
 """
 
 import pytest
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.contact import Contact
 from app.models.enums import LeadTier
 from app.models.user import User
 from tests.support.roles import UserRole, role_id_for
@@ -31,18 +34,14 @@ async def _make_account(db_session: AsyncSession, owner_id: int, company: str = 
 
 
 async def test_contact_persists_with_all_fields_and_inherits_timestamps(db_session: AsyncSession):
-    from app.models.contact import Contact
-
-    owner = await _make_owner(db_session)
-    account = await _make_account(db_session, owner.id)
-
     contact = Contact(
         first_name="Jane",
         last_name="Doe",
         email="jane.doe@acme.com",
         phone="555-1234",
+        alternate_phone="555-5678",
         job_title="VP Sales",
-        account_id=account.id,
+        linkedin_url="linkedin.com/in/janedoe",
     )
     db_session.add(contact)
     await db_session.flush()
@@ -53,19 +52,15 @@ async def test_contact_persists_with_all_fields_and_inherits_timestamps(db_sessi
     assert contact.last_name == "Doe"
     assert contact.email == "jane.doe@acme.com"
     assert contact.phone == "555-1234"
+    assert contact.alternate_phone == "555-5678"
     assert contact.job_title == "VP Sales"
-    assert contact.account_id == account.id
+    assert contact.linkedin_url == "linkedin.com/in/janedoe"
     assert contact.created_at is not None
     assert contact.updated_at is not None
 
 
 async def test_contact_persists_with_only_required_fields(db_session: AsyncSession):
-    from app.models.contact import Contact
-
-    owner = await _make_owner(db_session, email="owner2-contact@example.com")
-    account = await _make_account(db_session, owner.id, company="Minimal Co")
-
-    contact = Contact(first_name="Minimal", account_id=account.id)
+    contact = Contact(first_name="Minimal")
     db_session.add(contact)
     await db_session.flush()
     await db_session.refresh(contact)
@@ -73,23 +68,12 @@ async def test_contact_persists_with_only_required_fields(db_session: AsyncSessi
     assert contact.last_name is None
     assert contact.email is None
     assert contact.phone is None
+    assert contact.alternate_phone is None
     assert contact.job_title is None
+    assert contact.linkedin_url is None
 
 
 async def test_first_name_is_required(db_session: AsyncSession):
-    from app.models.contact import Contact
-
-    owner = await _make_owner(db_session, email="owner3-contact@example.com")
-    account = await _make_account(db_session, owner.id, company="No First Name Co")
-
-    db_session.add(Contact(first_name=None, account_id=account.id))
-    with pytest.raises(IntegrityError):
-        await db_session.flush()
-
-
-async def test_account_id_is_required(db_session: AsyncSession):
-    from app.models.contact import Contact
-
-    db_session.add(Contact(first_name="No Account", account_id=None))
+    db_session.add(Contact(first_name=None))
     with pytest.raises(IntegrityError):
         await db_session.flush()
