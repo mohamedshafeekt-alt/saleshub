@@ -121,3 +121,12 @@ async def test_revoke_refresh_token_is_idempotent_for_unknown_token(
 
     # must not raise
     await revoke_refresh_token(db_session, user, "never-issued-token")
+
+
+async def test_issue_tokens_sets_last_login_at(db_session: AsyncSession, make_user):
+    user = await make_user(email="stamps-last-login@example.com")
+    assert user.last_login_at is None
+
+    await issue_tokens(db_session, user)
+
+    assert user.last_login_at is not None

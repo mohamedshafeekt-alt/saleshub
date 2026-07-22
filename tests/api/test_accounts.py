@@ -18,7 +18,7 @@ the ACCOUNT's ownership, not deal ownership), 404 for a nonexistent account,
 
 from httpx import AsyncClient
 
-from app.models.user import UserRole
+from tests.support.roles import UserRole
 
 ACCOUNTS_URL = "/api/v1/accounts"
 

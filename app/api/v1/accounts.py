@@ -3,13 +3,18 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, require_role
+from app.core.deps import get_current_user
+from app.core.permission_codes import ACCOUNTS_ACCESS
+from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.contact import Contact
 from app.models.enums import LeadTier
 from app.models.user import User, UserRole
 from app.schemas.account import AccountCreate, AccountOverviewRead, AccountRead, AccountUpdate
 from app.schemas.contact_account import AccountContactRead, AccountContactUpsert
+from app.models.user import User
+from app.schemas.account import AccountCreate, AccountRead, AccountUpdate
+from app.schemas.contact import ContactRead
 from app.schemas.deal import DealRead
 from app.schemas.generic_response import Page
 from app.services.account_service import (
@@ -31,11 +36,7 @@ from app.services.contact_account_service import (
 )
 from app.services.deal_service import list_deals_for_account
 
-router = APIRouter(
-    prefix="/accounts",
-    tags=["accounts"],
-    dependencies=[Depends(require_role(UserRole.SALES_REP, UserRole.SALES_MANAGER, UserRole.ADMIN))],
-)
+router = APIRouter(prefix="/accounts", tags=["accounts"])
 
 
 def _to_account_contact_read(contact: Contact, is_primary: bool) -> AccountContactRead:
@@ -250,3 +251,6 @@ async def list_deals_for_account_route(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     return [DealRead.model_validate(deal) for deal in deals]
+
+
+tag_router_permissions(router, ACCOUNTS_ACCESS)

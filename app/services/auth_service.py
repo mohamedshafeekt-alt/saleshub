@@ -1,7 +1,8 @@
 """Session lifecycle: issue an access+refresh token pair at login, exchange a
 refresh token for a new access token, and revoke a refresh token on logout."""
 
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,18 +17,25 @@ class InvalidRefreshTokenError(Exception):
     """Raised when a refresh token is unknown, expired, revoked, or its user is inactive."""
 
 
-def _utcnow() -> datetime:
-    return datetime.now(UTC).replace(tzinfo=None)
+_IST = ZoneInfo("Asia/Kolkata")
+
+
+def _now_ist() -> datetime:
+    # Naive IST wall-clock time, to match Postgres' func.now() (used for
+    # created_at/updated_at) — the DB session timezone is Asia/Kolkata, so
+    # storing UTC here would silently disagree with those columns.
+    return datetime.now(_IST).replace(tzinfo=None)
 
 
 async def issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
     access_token = create_access_token(subject=str(user.id))
     refresh_token = create_refresh_token()
+    user.last_login_at = _now_ist()
     db.add(
         RefreshToken(
             user_id=user.id,
             token_hash=hash_token(refresh_token),
-            expires_at=_utcnow() + timedelta(days=settings.refresh_token_expire_days),
+            expires_at=_now_ist() + timedelta(days=settings.refresh_token_expire_days),
         )
     )
     await db.commit()
@@ -37,7 +45,7 @@ async def issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
 async def refresh_access_token(db: AsyncSession, refresh_token: str) -> str:
     result = await db.execute(select(RefreshToken).where(RefreshToken.token_hash == hash_token(refresh_token)))
     stored = result.scalar_one_or_none()
-    if stored is None or stored.revoked_at is not None or stored.expires_at < _utcnow():
+    if stored is None or stored.revoked_at is not None or stored.expires_at < _now_ist():
         raise InvalidRefreshTokenError("Invalid or expired refresh token")
 
     user = await db.get(User, stored.user_id)
@@ -56,5 +64,5 @@ async def revoke_refresh_token(db: AsyncSession, user: User, refresh_token: str)
     )
     stored = result.scalar_one_or_none()
     if stored is not None and stored.revoked_at is None:
-        stored.revoked_at = _utcnow()
+        stored.revoked_at = _now_ist()
         await db.commit()

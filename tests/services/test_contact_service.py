@@ -12,6 +12,9 @@ in tests/services/test_contact_account_service.py instead.
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.enums import LeadTier
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
 from app.schemas.contact import ContactCreate, ContactUpdate
 from app.services.contact_service import (
     ContactNotFoundError,
@@ -24,6 +27,30 @@ from app.services.contact_service import (
 
 async def test_create_contact_succeeds(db_session: AsyncSession):
     data = ContactCreate(first_name="Jane", last_name="Doe", email="jane@example.com")
+async def _make_user(
+    db_session: AsyncSession, email: str, role: UserRole, first_name: str = "Test", last_name: str | None = None
+) -> User:
+    user = User(email=email, hashed_password="x", first_name=first_name, last_name=last_name, role_id=await role_id_for(db_session, role))
+    db_session.add(user)
+    await db_session.flush()
+    await db_session.refresh(user, attribute_names=["role"])
+    return user
+
+
+async def _make_account(db_session: AsyncSession, owner_id: int, company: str = "Acme Corp"):
+    from app.models.account import Account
+
+    account = Account(company=company, tier=LeadTier.GOLD, owner_id=owner_id)
+    db_session.add(account)
+    await db_session.flush()
+    return account
+
+
+# --- create_contact ----------------------------------------------------------
+
+
+async def test_create_contact_raises_not_found_for_nonexistent_account(db_session: AsyncSession):
+    requester = await _make_user(db_session, "creator-contact@example.com", UserRole.SALES_MANAGER)
 
     contact = await create_contact(db_session, data)
 

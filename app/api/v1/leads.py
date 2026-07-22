@@ -5,15 +5,20 @@ from typing import Literal
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deps import get_current_user, get_email_sender, require_role
+from app.core.deps import get_current_user, get_email_sender
+from app.core.permission_codes import LEADS_ACCESS
+from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
-from app.models.enums import LeadSource, LeadStatus
-from app.models.user import User, UserRole
+from datetime import date
+
+from app.models.enums import LeadActivityType, LeadSource, LeadStatus
+from app.models.user import User
 from app.schemas.account import AccountRead
 from app.schemas.generic_response import Page
 from app.schemas.lead import LeadConvertRequest, LeadDetailRead, LeadRead, LeadUpsert
 from app.schemas.lead_activity import LeadActivityCreate, LeadActivityRead
 from app.schemas.lead_import import LeadImportResult
+from app.schemas.lead_activity import LeadActivityCreate, LeadActivityDetailRead, LeadActivityRead, LeadActivityUpdate
 from app.services.account_service import (
     LeadAlreadyConvertedError,
     LeadMissingFieldsForConversionError,
@@ -22,6 +27,13 @@ from app.services.account_service import (
 from app.services.email.sender import EmailSender
 from app.services.lead_activity_service import create_lead_activity
 from app.services.lead_import_service import LeadImportFileError, build_lead_import_template, import_leads
+from app.services.lead_activity_service import (
+    LeadActivityNotFoundError,
+    create_lead_activity,
+    delete_lead_activity,
+    list_lead_activities,
+    update_lead_activity,
+)
 from app.services.lead_service import (
     DuplicateLeadEmailError,
     LeadAccessForbiddenError,
@@ -43,6 +55,7 @@ router = APIRouter(
         Depends(require_role(UserRole.SALES_REP, UserRole.DELIVERY_SME, UserRole.SALES_MANAGER, UserRole.ADMIN))
     ],
 )
+router = APIRouter(prefix="/leads", tags=["leads"])
 
 
 @router.post("", response_model=LeadRead)
@@ -207,3 +220,67 @@ async def create_lead_activity_route(
 
     await db.commit()
     return LeadActivityRead.model_validate(activity)
+
+
+@router.get("/{lead_id}/activities", response_model=list[LeadActivityDetailRead])
+async def list_lead_activities_route(
+    lead_id: int,
+    types: list[LeadActivityType] | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[LeadActivityDetailRead]:
+    try:
+        activities = await list_lead_activities(
+            db, lead_id, current_user, types=types, date_from=date_from, date_to=date_to
+        )
+    except LeadNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except LeadAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    return [LeadActivityDetailRead.model_validate(activity) for activity in activities]
+
+
+@router.patch("/{lead_id}/activities/{activity_id}", response_model=LeadActivityDetailRead)
+async def update_lead_activity_route(
+    lead_id: int,
+    activity_id: int,
+    data: LeadActivityUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> LeadActivityDetailRead:
+    try:
+        activity = await update_lead_activity(db, lead_id, activity_id, data, requester=current_user)
+    except LeadNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except LeadAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except LeadActivityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
+    return LeadActivityDetailRead.model_validate(activity)
+
+
+@router.delete("/{lead_id}/activities/{activity_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_lead_activity_route(
+    lead_id: int,
+    activity_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        await delete_lead_activity(db, lead_id, activity_id, requester=current_user)
+    except LeadNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except LeadAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except LeadActivityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
+
+
+tag_router_permissions(router, LEADS_ACCESS)

@@ -2,7 +2,7 @@
 
 from httpx import AsyncClient
 
-from app.models.user import UserRole
+from tests.support.roles import UserRole
 
 LOGIN_URL = "/api/v1/auth/login"
 REFRESH_URL = "/api/v1/auth/refresh"

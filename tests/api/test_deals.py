@@ -14,7 +14,7 @@ stage transitions in order after PATCHes.
 
 from httpx import AsyncClient
 
-from app.models.user import UserRole
+from tests.support.roles import UserRole
 
 DEALS_URL = "/api/v1/deals"
 

@@ -12,6 +12,25 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
+from app.models.enums import LeadTier
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
+
+
+async def _make_owner(db_session: AsyncSession, email: str = "owner-contact@example.com") -> User:
+    owner = User(email=email, hashed_password="x", first_name="Owner", role_id=await role_id_for(db_session, UserRole.SALES_REP))
+    db_session.add(owner)
+    await db_session.flush()
+    return owner
+
+
+async def _make_account(db_session: AsyncSession, owner_id: int, company: str = "Acme Corp"):
+    from app.models.account import Account
+
+    account = Account(company=company, tier=LeadTier.GOLD, owner_id=owner_id)
+    db_session.add(account)
+    await db_session.flush()
+    return account
 
 
 async def test_contact_persists_with_all_fields_and_inherits_timestamps(db_session: AsyncSession):

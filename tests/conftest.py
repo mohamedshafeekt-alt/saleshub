@@ -49,11 +49,19 @@ _CREATE_TOUCH_LEAD_UPDATED_AT_STATEMENTS = [
 
 @pytest_asyncio.fixture(scope="session")
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
+    from app.core.rbac_seed import seed_permissions_and_roles
+
     eng = create_async_engine(TEST_DATABASE_URL)
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         for statement in _CREATE_TOUCH_LEAD_UPDATED_AT_STATEMENTS:
             await conn.execute(text(statement))
+
+    session_factory = async_sessionmaker(eng, expire_on_commit=False)
+    async with session_factory() as session:
+        await seed_permissions_and_roles(session)
+        await session.commit()
+
     yield eng
     await eng.dispose()
 
@@ -101,7 +109,9 @@ async def make_user(db_session: AsyncSession):
     """
 
     from app.core.security import hash_password
-    from app.models.user import User, UserRole
+    from app.models.user import User
+
+    from tests.support.roles import UserRole, role_id_for
 
     async def _make_user(
         email: str = "user@example.com",
@@ -113,7 +123,7 @@ async def make_user(db_session: AsyncSession):
         user = User(
             email=email,
             hashed_password=hash_password(password),
-            role=role,
+            role_id=await role_id_for(db_session, role),
             first_name=first_name,
             is_active=is_active,
         )

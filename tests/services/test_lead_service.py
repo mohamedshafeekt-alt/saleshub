@@ -6,14 +6,18 @@ source exact-match filter; search across company + owner name;
 not-found/forbidden checks on get/update/delete; partial update; delete.
 """
 
+from datetime import datetime
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.enums import LeadSource
+from app.models.enums import LeadActivityType, LeadSource, NotificationType
+from app.models.lead_activity import LeadActivity
 from app.models.lead_contact import LeadContact
-from app.models.user import User, UserRole
+from app.models.user import User
+from tests.support.roles import UserRole, role_id_for
 from app.schemas.lead import LeadContactInput, LeadUpsert
 from app.services.lead_service import (
     DuplicateLeadEmailError,
@@ -22,6 +26,7 @@ from app.services.lead_service import (
     create_lead,
     delete_lead,
     get_lead,
+    get_lead_detail,
     list_leads,
     update_lead,
 )
@@ -38,9 +43,10 @@ class FakeEmailSender:
 async def _make_user(
     db_session: AsyncSession, email: str, role: UserRole, first_name: str = "Test", last_name: str | None = None
 ) -> User:
-    user = User(email=email, hashed_password="x", first_name=first_name, last_name=last_name, role=role)
+    user = User(email=email, hashed_password="x", first_name=first_name, last_name=last_name, role_id=await role_id_for(db_session, role))
     db_session.add(user)
     await db_session.flush()
+    await db_session.refresh(user, attribute_names=["role"])
     return user
 
 
@@ -143,6 +149,44 @@ async def test_create_lead_notifies_all_admins(db_session: AsyncSession):
 
     notified = {call["to"] for call in fake_sender.calls}
     assert notified == {admin_a.email, admin_b.email}
+
+
+async def test_create_lead_creates_in_app_notifications_for_notifiable_users(db_session: AsyncSession):
+    from app.models.notification import Notification
+
+    admin = await _make_user(db_session, "admin-notif@example.com", UserRole.ADMIN)
+
+    data = LeadUpsert(
+        first_name="Jane",
+        company="Acme Corp",
+        email="notify-in-app@acme.com",
+        source=LeadSource.WEBSITE,
+    )
+    lead = await create_lead(db_session, data, FakeEmailSender())
+
+    result = await db_session.execute(
+        select(Notification).where(
+            Notification.recipient_id == admin.id, Notification.type == NotificationType.NEW_LEAD
+        )
+    )
+    notification = result.scalar_one()
+    assert notification.entity_type == "lead"
+    assert notification.entity_id == lead.id
+
+
+async def test_update_lead_reassignment_notifies_new_owner(db_session: AsyncSession, make_lead):
+    from app.models.notification import Notification
+
+    old_owner = await _make_user(db_session, "old-owner@example.com", UserRole.SALES_REP)
+    new_owner = await _make_user(db_session, "new-owner@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=old_owner.id, email="reassign-me@acme.com")
+
+    await update_lead(db_session, lead.id, LeadUpsert(id=lead.id, owner_id=new_owner.id), requester=old_owner)
+
+    result = await db_session.execute(select(Notification).where(Notification.recipient_id == new_owner.id))
+    notification = result.scalar_one()
+    assert notification.entity_id == lead.id
+    assert notification.type == NotificationType.LEAD_ASSIGNED
 
 
 async def test_create_lead_duplicate_email_raises(db_session: AsyncSession):
@@ -270,16 +314,26 @@ async def test_list_leads_search_matches_company_name(db_session: AsyncSession, 
     assert [lead.id for lead in results] == [match.id]
 
 
-async def test_list_leads_search_matches_owner_name(db_session: AsyncSession, make_lead):
+async def test_list_leads_search_matches_lead_name(db_session: AsyncSession, make_lead):
     manager = await _make_user(db_session, "manager-search2@example.com", UserRole.SALES_MANAGER)
-    owner = await _make_user(
-        db_session, "owner-search2@example.com", UserRole.SALES_REP, first_name="Alexandra", last_name="Ng"
+    owner = await _make_user(db_session, "owner-search2@example.com", UserRole.SALES_REP)
+    match = await make_lead(
+        owner_id=owner.id, email="search-owner@example.com", first_name="Alexandra", last_name="Ng"
     )
-    other_owner = await _make_user(db_session, "owner-search3@example.com", UserRole.SALES_REP)
-    match = await make_lead(owner_id=owner.id, email="search-owner@example.com")
-    await make_lead(owner_id=other_owner.id, email="no-match-owner@example.com")
+    await make_lead(owner_id=owner.id, email="no-match-owner@example.com", first_name="Priya", last_name="Rao")
 
     results, _total = await list_leads(db_session, requester=manager, search="alexandra")
+
+    assert [lead.id for lead in results] == [match.id]
+
+
+async def test_list_leads_search_matches_email(db_session: AsyncSession, make_lead):
+    manager = await _make_user(db_session, "manager-search3@example.com", UserRole.SALES_MANAGER)
+    owner = await _make_user(db_session, "owner-search3@example.com", UserRole.SALES_REP)
+    match = await make_lead(owner_id=owner.id, email="search-target@rocket.io")
+    await make_lead(owner_id=owner.id, email="no-match@other.io")
+
+    results, _total = await list_leads(db_session, requester=manager, search="rocket.io")
 
     assert [lead.id for lead in results] == [match.id]
 
@@ -380,3 +434,48 @@ async def test_delete_lead_removes_the_row(db_session: AsyncSession, make_lead):
 
     with pytest.raises(LeadNotFoundError):
         await get_lead(db_session, lead_id=lead_id, requester=owner)
+
+
+async def test_delete_lead_cascades_activities(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-del-cascade@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="cascade-delete@example.com")
+    lead_id = lead.id
+    db_session.add(LeadActivity(lead_id=lead_id, type=LeadActivityType.NOTE, note="call me", created_by=owner.id))
+    await db_session.flush()
+
+    await delete_lead(db_session, lead_id=lead_id, requester=owner)
+
+    remaining = (
+        await db_session.execute(select(LeadActivity).where(LeadActivity.lead_id == lead_id))
+    ).scalars().all()
+    assert remaining == []
+
+
+async def test_get_lead_detail_last_contact_at_is_none_without_activities(
+    db_session: AsyncSession, make_lead
+):
+    owner = await _make_user(db_session, "owner-no-activity@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="no-activity@example.com")
+
+    detail = await get_lead_detail(db_session, lead_id=lead.id, requester=owner)
+
+    assert detail.last_contact_at is None
+
+
+async def test_get_lead_detail_last_contact_at_is_latest_activity_updated_at(
+    db_session: AsyncSession, make_lead
+):
+    owner = await _make_user(db_session, "owner-with-activity@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="with-activity@example.com")
+    older = LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="first", created_by=owner.id)
+    newer = LeadActivity(lead_id=lead.id, type=LeadActivityType.CALL, note="second", created_by=owner.id)
+    db_session.add_all([older, newer])
+    await db_session.flush()
+    older.updated_at = datetime(2024, 1, 1, tzinfo=None)
+    newer.updated_at = datetime(2024, 6, 1, tzinfo=None)
+    await db_session.flush()
+
+    detail = await get_lead_detail(db_session, lead_id=lead.id, requester=owner)
+
+    assert detail.last_contact_at == newer.updated_at
+    assert detail.last_contact_at > older.updated_at

@@ -1,6 +1,6 @@
 """Lead ORM model: prospecting record owned by a Sales Rep."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey
@@ -48,10 +48,17 @@ class Lead(Base):
     # view needs them and eager-loading them for every list row would waste
     # a query fanning out per lead.
     owner: Mapped["User | None"] = relationship("User", lazy="joined")
-    contacts: Mapped[list["LeadContact"]] = relationship("LeadContact", order_by="LeadContact.id")
+    # passive_deletes=True: the FK already has ON DELETE CASCADE at the DB
+    # level, so let the DB remove children instead of the ORM nulling their
+    # (NOT NULL) lead_id on an unloaded collection when the lead is deleted.
+    contacts: Mapped[list["LeadContact"]] = relationship(
+        "LeadContact", order_by="LeadContact.id", passive_deletes=True
+    )
     # id, not created_at: created_at is now()-based (fixed for the whole
     # transaction), so activities inserted in the same transaction would tie.
-    activities: Mapped[list["LeadActivity"]] = relationship("LeadActivity", order_by="LeadActivity.id")
+    activities: Mapped[list["LeadActivity"]] = relationship(
+        "LeadActivity", order_by="LeadActivity.id", passive_deletes=True
+    )
 
     @property
     def owner_name(self) -> str | None:
@@ -62,3 +69,9 @@ class Lead(Base):
     @property
     def activity_count(self) -> int:
         return len(self.activities)
+
+    @property
+    def last_contact_at(self) -> datetime | None:
+        if not self.activities:
+            return None
+        return max(activity.updated_at for activity in self.activities)

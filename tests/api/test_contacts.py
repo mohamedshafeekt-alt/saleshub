@@ -10,7 +10,7 @@ successful DELETE, 404 for a nonexistent contact id.
 
 from httpx import AsyncClient
 
-from app.models.user import UserRole
+from tests.support.roles import UserRole
 
 CONTACTS_URL = "/api/v1/contacts"
 

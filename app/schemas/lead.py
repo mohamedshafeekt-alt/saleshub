@@ -88,17 +88,20 @@ class LeadRead(BaseModel):
     next_follow_up_date: date | None
     follow_up_note: str | None
     is_converted: bool
+    created_at: datetime
     updated_at: datetime
 
 
 class LeadDetailRead(LeadRead):
     """LeadRead plus everything the single-lead detail view needs: every
-    extra contact, the full activity log (with who logged each one), and a
-    count for the Activity panel's badge."""
+    extra contact, the full activity log (with who logged each one), a
+    count for the Activity panel's badge, and the most recent activity's
+    timestamp for the "Last Contact" stat."""
 
     contacts: list[LeadContactRead]
     activities: list[LeadActivityDetailRead]
     activity_count: int
+    last_contact_at: datetime | None
 
 
 class LeadConvertRequest(BaseModel):
