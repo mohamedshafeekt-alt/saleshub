@@ -22,6 +22,7 @@ from app.api.v1 import (
 from app.core.error_handler import register_error_handlers
 from app.core.logging import configure_logging
 from app.core.deps import bearer_scheme
+from app.core.rbac import public
 from app.core.rbac_middleware import enforce_rbac
 
 configure_logging()
@@ -47,6 +48,12 @@ app.add_middleware(
 register_error_handlers(app)
 
 app.mount("/media", StaticFiles(directory="media"), name="media")
+
+
+@app.get("/health")
+@public
+async def health() -> dict[str, str]:
+    return {"status": "ok"}
 
 app.include_router(auth.router, prefix="/api/v1")
 app.include_router(users.router, prefix="/api/v1")
