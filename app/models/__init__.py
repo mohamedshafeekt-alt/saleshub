@@ -3,8 +3,11 @@
 from app.models.account import Account
 from app.models.company import Company
 from app.models.contact import Contact
+from app.models.contact_account import ContactAccount
 from app.models.deal import Deal
+from app.models.deal_activity import DealActivity
 from app.models.deal_contact import DealContact
+from app.models.deal_document import DealDocument
 from app.models.deal_stage import DealStage
 from app.models.deal_stage_history import DealStageHistory
 from app.models.lead import Lead
@@ -20,8 +23,11 @@ __all__ = [
     "Account",
     "Company",
     "Contact",
+    "ContactAccount",
     "Deal",
+    "DealActivity",
     "DealContact",
+    "DealDocument",
     "DealStage",
     "DealStageHistory",
     "Lead",
