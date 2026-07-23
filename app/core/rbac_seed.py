@@ -14,6 +14,7 @@ from app.core.permission_codes import (
     ACCOUNTS_VIEW_ALL,
     CONTACTS_ACCESS,
     DEALS_ACCESS,
+    DEALS_DELETE_ANY_ACTIVITY,
     DEALS_VIEW_ALL,
     LEADS_ACCESS,
     LEADS_DELETE_ANY_ACTIVITY,
@@ -48,6 +49,12 @@ _PERMISSIONS = [
     (ACCOUNTS_VIEW_ALL, "View All Accounts", "See all accounts, not just owned ones", "Accounts"),
     (DEALS_ACCESS, "Access Deals", "View and manage deals", "Deals"),
     (DEALS_VIEW_ALL, "View All Deals", "See all deals, not just owned ones", "Deals"),
+    (
+        DEALS_DELETE_ANY_ACTIVITY,
+        "Delete Any Deal Activity",
+        "Delete a logged activity on any deal, regardless of ownership",
+        "Deals",
+    ),
     (CONTACTS_ACCESS, "Access Contacts", "View and manage contacts", "Contacts"),
 ]
 

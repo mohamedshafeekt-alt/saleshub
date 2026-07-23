@@ -42,15 +42,12 @@ class LeadActivityType(str, enum.Enum):
     FOLLOW_UP = "follow_up"
 
 
-class DealStage(str, enum.Enum):
-    RECEIVED_REQUIREMENTS = "received_requirements"
-    QUALIFIED_TO_BUY = "qualified_to_buy"
-    EVALUATION = "evaluation"
-    PROPOSALS = "proposals"
-    CONTRACTS = "contracts"
-    CLOSED_WON = "closed_won"
-    CLOSED_LOST = "closed_lost"
-    COLD_DEALS = "cold_deals"
+class DealActivityType(str, enum.Enum):
+    NOTE = "note"
+    MEETING = "meeting"
+    CALL = "call"
+    COMMENT = "comment"
+    FOLLOW_UP = "follow_up"
 
 
 class NotificationType(str, enum.Enum):

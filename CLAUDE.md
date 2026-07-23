@@ -50,7 +50,10 @@ and Delivery must sign off on that item.
 
 Explicitly OUT of scope for Phase 1 (do not build these even if the
 original scope PDF mentions them):
-- Document Management / Proposals repository
+- A full Document Management / Proposals repository (folders, versioning,
+  cross-entity document search). Per-deal document upload (proposals,
+  NDAs, contracts attached directly to a Deal) is in scope and built —
+  see `app/services/deal_document_service.py`.
 - Staff Augmentation (both resource list and opportunity tracking)
 - Dynamic / templated / stage-gated checklist logic — Phase 1 checklist
   is a flat, static list of items with a status toggle and notes field

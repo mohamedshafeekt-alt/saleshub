@@ -22,7 +22,11 @@ async def login(data: LoginRequest, db: AsyncSession = Depends(get_db)) -> Token
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid email or password")
 
     access_token, refresh_token = await auth_service.issue_tokens(db, user)
-    return Token(access_token=access_token, refresh_token=refresh_token)
+    return Token(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        permissions=sorted(user.permission_codes),
+    )
 
 
 @router.post("/refresh", response_model=Token)

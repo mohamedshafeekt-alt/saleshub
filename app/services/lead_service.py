@@ -1,6 +1,8 @@
 """Lead business logic: creation (with duplicate-email guard), role-scoped
 listing/search, and ownership-checked get/update/delete."""
 
+from typing import Any
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -139,6 +141,55 @@ async def list_leads(
     total = (await db.execute(count_query)).scalar_one()
     items = list((await db.execute(items_query)).scalars().all())
     return items, total
+
+
+async def export_leads(
+    db: AsyncSession,
+    *,
+    requester: User,
+    source: LeadSource | None = None,
+    status: LeadStatus | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    """All leads matching the requester's role-scoping (same rule as
+    list_leads). No pagination."""
+    filters = []
+    if LEADS_VIEW_ALL not in requester.permission_codes:
+        filters.append(or_(Lead.owner_id == requester.id, Lead.owner_id.is_(None)))
+    if source is not None:
+        filters.append(Lead.source == source)
+    if status is not None:
+        filters.append(Lead.status == status)
+    if search is not None:
+        pattern = f"%{search}%"
+        filters.append(
+            or_(
+                Lead.company.ilike(pattern),
+                Lead.first_name.ilike(pattern),
+                Lead.last_name.ilike(pattern),
+                Lead.email.ilike(pattern),
+            )
+        )
+
+    result = await db.execute(
+        select(Lead)
+        .options(selectinload(Lead.owner))
+        .where(*filters)
+        .order_by(Lead.created_at.desc())
+    )
+    leads = result.scalars().all()
+    return [
+        {
+            "name": " ".join(filter(None, [lead.first_name, lead.last_name])),
+            "email": lead.email,
+            "phone": lead.phone,
+            "company": lead.company,
+            "source": lead.source.value,
+            "status": lead.status.value,
+            "owner": lead.owner_name,
+        }
+        for lead in leads
+    ]
 
 
 def _check_lead_access(lead: Lead, requester: User) -> None:

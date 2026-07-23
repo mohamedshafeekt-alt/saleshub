@@ -9,6 +9,9 @@ bulk import template download (xlsx/csv) and file upload (xlsx/csv, plus a
 rejected non-spreadsheet extension).
 """
 
+import io
+
+import openpyxl
 import pytest_asyncio
 from httpx import AsyncClient
 
@@ -1204,3 +1207,27 @@ async def test_update_lead_activity_returns_403_for_non_owner(
     )
 
     assert response.status_code == 403
+
+
+async def test_export_leads_returns_valid_xlsx_with_expected_rows(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-export-lead@example.com", role=UserRole.SALES_REP)
+    await make_lead(owner_id=owner.id, email="export-xlsx-lead@example.com", company="Export Xlsx Lead Co")
+    headers = auth_headers(owner)
+
+    response = await client.get(f"{LEADS_URL}/export", headers=headers)
+
+    assert response.status_code == 200
+    assert (
+        response.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "leads.xlsx" in response.headers["content-disposition"]
+
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    sheet = workbook.active
+    header = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+    assert header == ["Name", "Email", "Phone", "Company", "Source", "Status", "Owner"]
+    data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    assert any(row[3] == "Export Xlsx Lead Co" for row in data_rows)

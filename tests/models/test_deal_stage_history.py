@@ -16,6 +16,20 @@ async def _make_owner(db_session: AsyncSession, email: str = "owner@example.com"
     return owner
 
 
+async def _make_stage(db_session: AsyncSession, suffix: str = "1"):
+    from app.models.company import Company
+    from app.models.deal_stage import DealStage
+
+    company = Company(name=f"History Stage Co {suffix}")
+    db_session.add(company)
+    await db_session.flush()
+
+    stage = DealStage(company_id=company.id, name=f"History Stage {suffix}", sort_order=0)
+    db_session.add(stage)
+    await db_session.flush()
+    return stage
+
+
 async def _make_deal(db_session: AsyncSession, owner_id: int, suffix: str = "1"):
     from app.models.account import Account
     from app.models.deal import Deal
@@ -24,7 +38,8 @@ async def _make_deal(db_session: AsyncSession, owner_id: int, suffix: str = "1")
     db_session.add(account)
     await db_session.flush()
 
-    deal = Deal(deal_name=f"History Model Deal {suffix}", account_id=account.id, owner_id=owner_id)
+    stage = await _make_stage(db_session, suffix)
+    deal = Deal(deal_name=f"History Model Deal {suffix}", account_id=account.id, owner_id=owner_id, stage_id=stage.id)
     db_session.add(deal)
     await db_session.flush()
     return deal
@@ -34,15 +49,15 @@ async def test_deal_stage_history_persists_with_all_fields_and_inherits_timestam
     db_session: AsyncSession,
 ):
     from app.models.deal_stage_history import DealStageHistory
-    from app.models.enums import DealStage
 
     owner = await _make_owner(db_session)
     deal = await _make_deal(db_session, owner.id, "1")
+    next_stage = await _make_stage(db_session, "1-next")
 
     history = DealStageHistory(
         deal_id=deal.id,
-        from_stage=DealStage.RECEIVED_REQUIREMENTS,
-        to_stage=DealStage.QUALIFIED_TO_BUY,
+        from_stage_id=deal.stage_id,
+        to_stage_id=next_stage.id,
         changed_by=owner.id,
         note="Moved forward",
     )
@@ -52,8 +67,8 @@ async def test_deal_stage_history_persists_with_all_fields_and_inherits_timestam
 
     assert history.id is not None
     assert history.deal_id == deal.id
-    assert history.from_stage == DealStage.RECEIVED_REQUIREMENTS
-    assert history.to_stage == DealStage.QUALIFIED_TO_BUY
+    assert history.from_stage_id == deal.stage_id
+    assert history.to_stage_id == next_stage.id
     assert history.changed_by == owner.id
     assert history.note == "Moved forward"
     assert history.created_at is not None
@@ -62,36 +77,35 @@ async def test_deal_stage_history_persists_with_all_fields_and_inherits_timestam
 
 async def test_from_stage_can_be_null(db_session: AsyncSession):
     from app.models.deal_stage_history import DealStageHistory
-    from app.models.enums import DealStage
 
     owner = await _make_owner(db_session, email="owner2@example.com")
     deal = await _make_deal(db_session, owner.id, "2")
 
     history = DealStageHistory(
         deal_id=deal.id,
-        from_stage=None,
-        to_stage=DealStage.RECEIVED_REQUIREMENTS,
+        from_stage_id=None,
+        to_stage_id=deal.stage_id,
         changed_by=owner.id,
     )
     db_session.add(history)
     await db_session.flush()
     await db_session.refresh(history)
 
-    assert history.from_stage is None
+    assert history.from_stage_id is None
     assert history.note is None
 
 
 async def test_deal_id_is_required(db_session: AsyncSession):
     from app.models.deal_stage_history import DealStageHistory
-    from app.models.enums import DealStage
 
     owner = await _make_owner(db_session, email="owner3@example.com")
+    stage = await _make_stage(db_session, "3")
 
     db_session.add(
         DealStageHistory(
             deal_id=None,
-            from_stage=None,
-            to_stage=DealStage.RECEIVED_REQUIREMENTS,
+            from_stage_id=None,
+            to_stage_id=stage.id,
             changed_by=owner.id,
         )
     )
@@ -106,7 +120,7 @@ async def test_to_stage_is_required(db_session: AsyncSession):
     deal = await _make_deal(db_session, owner.id, "4")
 
     db_session.add(
-        DealStageHistory(deal_id=deal.id, from_stage=None, to_stage=None, changed_by=owner.id)
+        DealStageHistory(deal_id=deal.id, from_stage_id=None, to_stage_id=None, changed_by=owner.id)
     )
     with pytest.raises(IntegrityError):
         await db_session.flush()
@@ -114,7 +128,6 @@ async def test_to_stage_is_required(db_session: AsyncSession):
 
 async def test_changed_by_is_required(db_session: AsyncSession):
     from app.models.deal_stage_history import DealStageHistory
-    from app.models.enums import DealStage
 
     owner = await _make_owner(db_session, email="owner5@example.com")
     deal = await _make_deal(db_session, owner.id, "5")
@@ -122,8 +135,8 @@ async def test_changed_by_is_required(db_session: AsyncSession):
     db_session.add(
         DealStageHistory(
             deal_id=deal.id,
-            from_stage=None,
-            to_stage=DealStage.RECEIVED_REQUIREMENTS,
+            from_stage_id=None,
+            to_stage_id=deal.stage_id,
             changed_by=None,
         )
     )

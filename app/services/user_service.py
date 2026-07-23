@@ -15,6 +15,7 @@ from app.schemas.user import UserCreate, UserUpdate
 from app.core.logging import logger
 from app.services.email.sender import EmailSender
 from app.services.email.templates import send_new_user_credentials_email
+from app.services.file_upload_service import FileUploadService, UnsupportedFileTypeError
 
 
 class EmailAlreadyExistsError(Exception):
@@ -146,26 +147,25 @@ async def change_password(db: AsyncSession, user: User, current_password: str, n
     await db.flush()
 
 
-class UnsupportedImageTypeError(Exception):
+class UnsupportedImageTypeError(UnsupportedFileTypeError):
     """Raised when an avatar upload isn't image/png or image/jpeg."""
 
 
-_AVATAR_DIR = Path("media/avatars")
-_AVATAR_EXTENSION_BY_CONTENT_TYPE = {"image/png": ".png", "image/jpeg": ".jpg"}
+_avatar_upload_service = FileUploadService(
+    base_dir=Path("media/avatars"),
+    allowed_content_types={"image/png": ".png", "image/jpeg": ".jpg"},
+)
 
 
 async def save_avatar(db: AsyncSession, user: User, content: bytes, content_type: str) -> str:
-    extension = _AVATAR_EXTENSION_BY_CONTENT_TYPE.get(content_type)
-    if extension is None:
-        raise UnsupportedImageTypeError(f"Unsupported image type: {content_type}")
+    try:
+        # ponytail: fixed filename per user means switching png<->jpeg leaves the
+        # old file orphaned on disk; not worth a cleanup pass for an internal tool.
+        avatar_url = _avatar_upload_service.save(content, content_type, filename_stem=str(user.id))
+    except UnsupportedFileTypeError as exc:
+        raise UnsupportedImageTypeError(str(exc)) from exc
 
-    _AVATAR_DIR.mkdir(parents=True, exist_ok=True)
-    # ponytail: fixed filename per user means switching png<->jpeg leaves the
-    # old file orphaned on disk; not worth a cleanup pass for an internal tool.
-    filename = f"{user.id}{extension}"
-    (_AVATAR_DIR / filename).write_bytes(content)
-
-    user.avatar_url = f"/media/avatars/{filename}"
+    user.avatar_url = avatar_url
     await db.flush()
     return user.avatar_url
 

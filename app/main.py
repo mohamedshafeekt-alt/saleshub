@@ -10,6 +10,7 @@ from app.api.v1 import (
     accounts,
     auth,
     contacts,
+    deal_stages,
     deals,
     leads,
     notifications,
@@ -53,6 +54,7 @@ app.include_router(leads.router, prefix="/api/v1")
 app.include_router(accounts.router, prefix="/api/v1")
 app.include_router(contacts.router, prefix="/api/v1")
 app.include_router(deals.router, prefix="/api/v1")
+app.include_router(deal_stages.router, prefix="/api/v1")
 app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(permissions.router, prefix="/api/v1")
 app.include_router(roles.router, prefix="/api/v1")

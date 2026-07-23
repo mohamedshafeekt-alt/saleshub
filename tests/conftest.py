@@ -271,35 +271,89 @@ def anyio_backend() -> str:
 
 
 @pytest_asyncio.fixture
-async def make_deal(db_session: AsyncSession):
+async def make_company(db_session: AsyncSession):
+    """Factory fixture: await make_company(name=...) -> Company."""
+
+    from app.models.company import Company
+
+    async def _make_company(name: str = "Test Co"):
+        company = Company(name=name)
+        db_session.add(company)
+        await db_session.flush()
+        await db_session.commit()
+        return company
+
+    return _make_company
+
+
+@pytest_asyncio.fixture
+async def make_deal_stage(db_session: AsyncSession, make_company):
+    """Factory fixture: await make_deal_stage(company_id=..., name=..., ...) -> DealStage.
+
+    company_id defaults to a fresh auto-created Company so callers that don't
+    care about tenancy grouping can omit it entirely.
+    """
+
+    from app.models.deal_stage import DealStage
+
+    async def _make_deal_stage(
+        company_id: int | None = None,
+        name: str = "Stage",
+        sort_order: int = 0,
+        is_cold: bool = False,
+    ):
+        if company_id is None:
+            company = await make_company()
+            company_id = company.id
+        stage = DealStage(company_id=company_id, name=name, sort_order=sort_order, is_cold=is_cold)
+        db_session.add(stage)
+        await db_session.flush()
+        await db_session.commit()
+        return stage
+
+    return _make_deal_stage
+
+
+@pytest_asyncio.fixture
+async def make_deal(db_session: AsyncSession, make_deal_stage):
     """Factory fixture: await make_deal(account_id=..., owner_id=..., ...) -> Deal.
 
     Constructs the ORM Deal directly (bypassing create_deal/DealCreate) so
     service/API tests can set up fixture data without going through the
-    thing under test. Mirrors make_contact's style.
+    thing under test. Mirrors make_contact's style. stage_id defaults to a
+    freshly created (non-cold) DealStage under its own Company when omitted.
     """
 
     from app.models.deal import Deal
-    from app.models.enums import DealStage
+    from app.models.deal_contact import DealContact
 
     async def _make_deal(
         account_id: int,
         owner_id: int,
         deal_name: str = "Dealname Co Deal",
         currency: str = "USD",
-        stage: DealStage = DealStage.RECEIVED_REQUIREMENTS,
+        stage_id: int | None = None,
+        contact_ids: list[int] | None = None,
         **kwargs,
     ):
+        if stage_id is None:
+            stage = await make_deal_stage(name=f"Stage for {deal_name}")
+            stage_id = stage.id
         deal = Deal(
             deal_name=deal_name,
             account_id=account_id,
             owner_id=owner_id,
             currency=currency,
-            stage=stage,
+            stage_id=stage_id,
             **kwargs,
         )
         db_session.add(deal)
         await db_session.flush()
+
+        for contact_id in contact_ids or []:
+            db_session.add(DealContact(deal_id=deal.id, contact_id=contact_id))
+        await db_session.flush()
+
         await db_session.commit()
         return deal
 

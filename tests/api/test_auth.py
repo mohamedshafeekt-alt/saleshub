@@ -23,6 +23,19 @@ async def test_login_correct_credentials_returns_token(client: AsyncClient, make
     assert body["token_type"] == "bearer"
 
 
+async def test_login_returns_role_permission_codes(client: AsyncClient, make_user):
+    await make_user(email="perms@example.com", password="correct-password", role=UserRole.ADMIN)
+
+    response = await client.post(
+        LOGIN_URL, json={"email": "perms@example.com", "password": "correct-password"}
+    )
+
+    assert response.status_code == 200
+    permissions = response.json()["permissions"]
+    assert isinstance(permissions, list)
+    assert len(permissions) > 0
+
+
 async def test_login_wrong_password_returns_401(client: AsyncClient, make_user):
     await make_user(email="wrongpw@example.com", password="correct-password", role=UserRole.SALES_REP)
 
