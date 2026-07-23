@@ -28,7 +28,7 @@ dev = [
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.15.21",
-    "types-openpyxl>=3.1.5.20260117",
+    "types-openpyxl>=3.1.5.20260518",
     "types-passlib>=1.7.7.20260211",
     "types-python-jose>=3.5.0.20260408",
 ]

@@ -10,7 +10,8 @@ from app.models.account import Account
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.deal import Deal
-from app.models.enums import DealStage, LeadTier
+from app.models.deal_stage import DealStage
+from app.models.enums import LeadTier
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from app.services.lead_service import get_lead
@@ -21,7 +22,7 @@ _EAGER_LOAD_OPTIONS = (
     selectinload(Account.deals),
 )
 
-_CLOSED_DEAL_STAGES = {DealStage.CLOSED_WON, DealStage.CLOSED_LOST, DealStage.COLD_DEALS}
+_CLOSED_STAGE_NAMES = {"Closed Won", "Closed Lost"}
 
 
 class AccountNotFoundError(Exception):
@@ -205,7 +206,17 @@ async def get_account_overview(
     Total ARR have no backing model yet, so they aren't computed here --
     the route fills those with null."""
     account = await _get_account_or_raise(db, account_id, requester)
-    active_deals = [deal for deal in account.deals if deal.stage not in _CLOSED_DEAL_STAGES]
+    stage_ids = {deal.stage_id for deal in account.deals}
+    closed_stage_ids: set[int] = set()
+    if stage_ids:
+        result = await db.execute(
+            select(DealStage.id).where(
+                DealStage.id.in_(stage_ids),
+                or_(DealStage.is_cold.is_(True), DealStage.name.in_(_CLOSED_STAGE_NAMES)),
+            )
+        )
+        closed_stage_ids = set(result.scalars().all())
+    active_deals = [deal for deal in account.deals if deal.stage_id not in closed_stage_ids]
     open_deal_value = sum((deal.value or 0) for deal in active_deals)
     return account, active_deals, open_deal_value
 

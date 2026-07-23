@@ -25,6 +25,7 @@ from app.services.lead_service import (
     LeadNotFoundError,
     create_lead,
     delete_lead,
+    export_leads,
     get_lead,
     get_lead_detail,
     list_leads,
@@ -479,3 +480,31 @@ async def test_get_lead_detail_last_contact_at_is_latest_activity_updated_at(
 
     assert detail.last_contact_at == newer.updated_at
     assert detail.last_contact_at > older.updated_at
+
+
+async def test_export_leads_scopes_to_owner_and_unassigned_for_non_view_all_role(
+    db_session: AsyncSession, make_lead
+):
+    rep_a = await _make_user(db_session, "rep-export-svc@example.com", UserRole.SALES_REP)
+    other_rep = await _make_user(db_session, "rep-export-svc-other@example.com", UserRole.SALES_REP)
+    own = await make_lead(owner_id=rep_a.id, email="own-export-svc@example.com", company="Own Export Co")
+    unassigned = await make_lead(owner_id=None, email="unassigned-export-svc@example.com")
+    await make_lead(owner_id=other_rep.id, email="other-export-svc@example.com")
+
+    rows = await export_leads(db_session, requester=rep_a)
+
+    companies = {row["company"] for row in rows}
+    assert own.company in companies
+    assert unassigned.company in companies
+    assert len(rows) == 2
+
+
+async def test_export_leads_sees_all_for_view_all_role(db_session: AsyncSession, make_lead):
+    manager = await _make_user(db_session, "manager-export-svc@example.com", UserRole.SALES_MANAGER)
+    rep = await _make_user(db_session, "rep-export-svc-2@example.com", UserRole.SALES_REP)
+    await make_lead(owner_id=rep.id, email="rep-owned-export-svc@example.com")
+    await make_lead(owner_id=None, email="unassigned-export-svc-2@example.com")
+
+    rows = await export_leads(db_session, requester=manager)
+
+    assert len(rows) >= 2

@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
-from app.models.enums import DealStage, LeadTier
+from app.models.enums import LeadTier
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from tests.support.roles import UserRole, role_id_for
@@ -426,21 +426,21 @@ async def test_delete_account_removes_the_row(db_session: AsyncSession, make_acc
 
 
 async def test_get_account_overview_open_deal_value_excludes_closed_and_cold_deals(
-    db_session: AsyncSession, make_account, make_deal
+    db_session: AsyncSession, make_account, make_deal, make_deal_stage
 ):
     owner = await _make_user(db_session, "owner-overview-value@example.com", UserRole.SALES_REP)
     account = await make_account(owner_id=owner.id, company="Overview Value Co")
-    await make_deal(account_id=account.id, owner_id=owner.id, stage=DealStage.PROPOSALS, value=650_000)
-    await make_deal(
-        account_id=account.id, owner_id=owner.id, stage=DealStage.EVALUATION, value=1_200_000
-    )
-    await make_deal(
-        account_id=account.id, owner_id=owner.id, stage=DealStage.CLOSED_WON, value=999_999
-    )
+    proposals = await make_deal_stage(name="Proposals")
+    evaluation = await make_deal_stage(name="Evaluation")
+    closed_won = await make_deal_stage(name="Closed Won")
+    cold_deals = await make_deal_stage(name="Cold Deals", is_cold=True)
+    await make_deal(account_id=account.id, owner_id=owner.id, stage_id=proposals.id, value=650_000)
+    await make_deal(account_id=account.id, owner_id=owner.id, stage_id=evaluation.id, value=1_200_000)
+    await make_deal(account_id=account.id, owner_id=owner.id, stage_id=closed_won.id, value=999_999)
     await make_deal(
         account_id=account.id,
         owner_id=owner.id,
-        stage=DealStage.COLD_DEALS,
+        stage_id=cold_deals.id,
         value=1,
         cold_reason="Went quiet",
     )
@@ -450,7 +450,7 @@ async def test_get_account_overview_open_deal_value_excludes_closed_and_cold_dea
     )
 
     assert open_deal_value == 1_850_000
-    assert {deal.stage for deal in active_deals} == {DealStage.PROPOSALS, DealStage.EVALUATION}
+    assert {deal.stage_id for deal in active_deals} == {proposals.id, evaluation.id}
 
 
 async def test_get_account_overview_zero_deals_returns_zero_value(

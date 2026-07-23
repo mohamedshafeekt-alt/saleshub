@@ -3,6 +3,7 @@
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_email_sender
@@ -25,6 +26,7 @@ from app.services.account_service import (
 )
 from app.services.email.sender import EmailSender
 from app.services.lead_import_service import LeadImportFileError, build_lead_import_template, import_leads
+from app.services.export_service import rows_to_xlsx
 from app.services.lead_activity_service import (
     LeadActivityNotFoundError,
     create_lead_activity,
@@ -38,6 +40,7 @@ from app.services.lead_service import (
     LeadNotFoundError,
     create_lead,
     delete_lead,
+    export_leads,
     get_lead_detail,
     list_leads,
     update_lead,
@@ -131,6 +134,40 @@ async def import_leads_route(
         return await import_leads(db, content, file.filename, current_user, email_sender)
     except LeadImportFileError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    
+@router.get("/export")
+async def export_leads_route(
+    source: LeadSource | None = Query(None),
+    lead_status: LeadStatus | None = Query(None, alias="status"),
+    search: str | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> StreamingResponse:
+    rows = await export_leads(db, requester=current_user, source=source, status=lead_status, search=search)
+
+    buffer = rows_to_xlsx(
+        ["Name", "Email", "Phone", "Company", "Source", "Status", "Owner"],
+        [
+            [
+                row["name"],
+                row["email"],
+                row["phone"],
+                row["company"],
+                row["source"],
+                row["status"],
+                row["owner"],
+            ]
+            for row in rows
+        ],
+        sheet_name="Leads",
+    )
+
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": "attachment; filename=leads.xlsx"},
+    )
 
 
 @router.get("/{lead_id}", response_model=LeadDetailRead)

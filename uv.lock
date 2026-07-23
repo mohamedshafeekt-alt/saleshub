@@ -901,7 +901,7 @@ dev = [
     { name = "pytest", specifier = ">=9.1.1" },
     { name = "pytest-asyncio", specifier = ">=1.4.0" },
     { name = "ruff", specifier = ">=0.15.21" },
-    { name = "types-openpyxl", specifier = ">=3.1.5.20260117" },
+    { name = "types-openpyxl", specifier = ">=3.1.5.20260518" },
     { name = "types-passlib", specifier = ">=1.7.7.20260211" },
     { name = "types-python-jose", specifier = ">=3.5.0.20260408" },
 ]
