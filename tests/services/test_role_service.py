@@ -1,6 +1,7 @@
 """Role service: create/list/update/soft-delete."""
 
 import pytest
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.permission import Permission
@@ -63,6 +64,18 @@ async def test_update_role_replaces_permission_set(db_session: AsyncSession):
 
     assert updated.name == "Renamed Role"
     assert [p.code for p in updated.permissions] == ["b.access"]
+
+
+async def test_create_role_with_view_all_auto_grants_access(db_session: AsyncSession):
+    result = await db_session.execute(select(Permission).where(Permission.code == "leads.view_all"))
+    view_all = result.scalar_one()
+
+    role = await create_role(
+        db_session, RoleCreate(name="Scoped Role", permission_ids=[view_all.id])
+    )
+
+    codes = {p.code for p in role.permissions}
+    assert codes == {"leads.access", "leads.view_all"}
 
 
 async def test_update_role_missing_id_raises_not_found(db_session: AsyncSession):

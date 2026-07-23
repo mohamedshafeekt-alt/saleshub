@@ -4,6 +4,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.permission_codes import PERMISSION_DEPENDENCIES
 from app.models.permission import Permission
 from app.models.role import Role
 from app.schemas.role import RoleCreate, RoleUpdate
@@ -21,7 +22,21 @@ async def _load_permissions(db: AsyncSession, permission_ids: list[int]) -> list
     if not permission_ids:
         return []
     result = await db.execute(select(Permission).where(Permission.id.in_(permission_ids)))
-    return list(result.scalars().all())
+    permissions = list(result.scalars().all())
+
+    codes = {p.code for p in permissions}
+    missing_dependency_codes = {
+        PERMISSION_DEPENDENCIES[code]
+        for code in codes
+        if code in PERMISSION_DEPENDENCIES and PERMISSION_DEPENDENCIES[code] not in codes
+    }
+    if missing_dependency_codes:
+        result = await db.execute(
+            select(Permission).where(Permission.code.in_(missing_dependency_codes))
+        )
+        permissions.extend(result.scalars().all())
+
+    return permissions
 
 
 async def create_role(db: AsyncSession, data: RoleCreate) -> Role:
