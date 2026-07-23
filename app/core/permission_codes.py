@@ -16,3 +16,14 @@ DEALS_ACCESS = "deals.access"
 DEALS_VIEW_ALL = "deals.view_all"
 DEALS_DELETE_ANY_ACTIVITY = "deals.delete_any_activity"
 CONTACTS_ACCESS = "contacts.access"
+
+# A "view_all" permission only widens scope within a module a role can
+# already access -- it's meaningless without the module's base "access"
+# permission. Enforced in app.services.role_service so a role can never end
+# up with one of these but not its dependency, regardless of how the
+# permission set was assigned (admin UI or otherwise).
+PERMISSION_DEPENDENCIES: dict[str, str] = {
+    LEADS_VIEW_ALL: LEADS_ACCESS,
+    ACCOUNTS_VIEW_ALL: ACCOUNTS_ACCESS,
+    DEALS_VIEW_ALL: DEALS_ACCESS,
+}
