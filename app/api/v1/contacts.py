@@ -12,6 +12,7 @@ from app.db.session import get_db
 from app.schemas.contact import ContactCreate, ContactRead, ContactUpdate
 from app.services.contact_service import (
     ContactNotFoundError,
+    DuplicateContactEmailError,
     create_contact,
     delete_contact,
     get_contact,
@@ -26,7 +27,11 @@ async def create_contact_route(
     data: ContactCreate,
     db: AsyncSession = Depends(get_db),
 ) -> ContactRead:
-    contact = await create_contact(db, data)
+    try:
+        contact = await create_contact(db, data)
+    except DuplicateContactEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     await db.commit()
     return ContactRead.model_validate(contact)
 
@@ -54,6 +59,8 @@ async def update_contact_route(
         contact = await update_contact(db, contact_id, data)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except DuplicateContactEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     await db.commit()
     return ContactRead.model_validate(contact)

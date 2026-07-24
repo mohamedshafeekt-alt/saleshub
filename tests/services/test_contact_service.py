@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.schemas.contact import ContactCreate, ContactUpdate
 from app.services.contact_service import (
     ContactNotFoundError,
+    DuplicateContactEmailError,
     create_contact,
     delete_contact,
     get_contact,
@@ -36,14 +37,14 @@ async def test_create_contact_succeeds(db_session: AsyncSession):
 async def test_create_contact_with_linkedin_and_alternate_phone(db_session: AsyncSession):
     data = ContactCreate(
         first_name="Jane",
-        linkedin_url="linkedin.com/in/jane",
+        linkedin_url="https://linkedin.com/in/jane",
         phone="555-0001",
         alternate_phone="555-0002",
     )
 
     contact = await create_contact(db_session, data)
 
-    assert contact.linkedin_url == "linkedin.com/in/jane"
+    assert contact.linkedin_url == "https://linkedin.com/in/jane"
     assert contact.phone == "555-0001"
     assert contact.alternate_phone == "555-0002"
 
@@ -76,6 +77,21 @@ async def test_update_contact_applies_partial_changes(db_session: AsyncSession):
     assert updated.first_name == "New"
     assert updated.last_name == "Name"  # untouched field preserved
     assert updated.job_title == "Old Title"  # untouched field preserved
+
+
+async def test_create_contact_duplicate_email_raises(db_session: AsyncSession):
+    await create_contact(db_session, ContactCreate(first_name="First", email="dup-contact@example.com"))
+
+    with pytest.raises(DuplicateContactEmailError):
+        await create_contact(db_session, ContactCreate(first_name="Second", email="dup-contact@example.com"))
+
+
+async def test_update_contact_duplicate_email_raises(db_session: AsyncSession):
+    await create_contact(db_session, ContactCreate(first_name="First", email="taken@example.com"))
+    other = await create_contact(db_session, ContactCreate(first_name="Second", email="free@example.com"))
+
+    with pytest.raises(DuplicateContactEmailError):
+        await update_contact(db_session, contact_id=other.id, data=ContactUpdate(email="taken@example.com"))
 
 
 async def test_delete_contact_raises_not_found_for_missing_id(db_session: AsyncSession):

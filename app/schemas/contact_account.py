@@ -4,7 +4,9 @@ ContactAccount link (with is_primary) for one specific account in a single
 call.
 """
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
+
+from app.schemas.validators import validate_linkedin_url
 
 
 class AccountContactUpsert(BaseModel):
@@ -22,10 +24,12 @@ class AccountContactUpsert(BaseModel):
     last_name: str | None = None
     job_title: str | None = None
     linkedin_url: str | None = None
-    email: str | None = None
+    email: EmailStr | None = None
     phone: str | None = None
     alternate_phone: str | None = None
     is_primary: bool | None = None
+
+    _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
 
     @model_validator(mode="after")
     def _first_name_required_when_creating(self) -> "AccountContactUpsert":

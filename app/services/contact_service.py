@@ -9,6 +9,7 @@ is_primary flag) lives in contact_account_service.py instead.
 """
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
@@ -19,10 +20,18 @@ class ContactNotFoundError(Exception):
     """Raised when a contact id does not exist."""
 
 
+class DuplicateContactEmailError(Exception):
+    """Raised when attempting to create/update a contact with an email already in use."""
+
+
 async def create_contact(db: AsyncSession, data: ContactCreate) -> Contact:
     contact = Contact(**data.model_dump())
     db.add(contact)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise DuplicateContactEmailError(f"Email already exists: {data.email}") from exc
     return contact
 
 
@@ -44,7 +53,11 @@ async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate)
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(contact, field, value)
 
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        raise DuplicateContactEmailError(f"Email already exists: {data.email}") from exc
     return contact
 
 

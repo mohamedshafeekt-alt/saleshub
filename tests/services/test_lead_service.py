@@ -213,6 +213,31 @@ async def test_create_lead_duplicate_email_raises(db_session: AsyncSession):
         await create_lead(db_session, dup_data, FakeEmailSender())
 
 
+async def test_create_lead_duplicate_extra_contact_email_raises(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-dup-extra@example.com", UserRole.SALES_REP)
+
+    data = LeadUpsert(
+        first_name="Jane",
+        company="Acme Corp",
+        email="lead-dup-extra@acme.com",
+        source=LeadSource.WEBSITE,
+        owner_id=owner.id,
+        contacts=[LeadContactInput(email="extra-dup@acme.com")],
+    )
+    await create_lead(db_session, data, FakeEmailSender())
+
+    dup_data = LeadUpsert(
+        first_name="John",
+        company="Other Corp",
+        email="other-lead@acme.com",
+        source=LeadSource.REFERRAL,
+        owner_id=owner.id,
+        contacts=[LeadContactInput(email="extra-dup@acme.com")],
+    )
+    with pytest.raises(DuplicateLeadEmailError):
+        await create_lead(db_session, dup_data, FakeEmailSender())
+
+
 async def test_create_lead_bad_owner_id_raises_integrity_error_not_duplicate_email(db_session: AsyncSession):
     # A foreign-key violation on owner_id must not be mislabeled as a
     # duplicate-email conflict just because both errors are IntegrityErrors.

@@ -18,6 +18,7 @@ from app.services.auth_service import (
     InvalidRefreshTokenError,
     issue_tokens,
     refresh_access_token,
+    revoke_all_refresh_tokens,
     revoke_refresh_token,
 )
 
@@ -121,6 +122,32 @@ async def test_revoke_refresh_token_is_idempotent_for_unknown_token(
 
     # must not raise
     await revoke_refresh_token(db_session, user, "never-issued-token")
+
+
+async def test_revoke_all_refresh_tokens_revokes_every_session(db_session: AsyncSession, make_user):
+    user = await make_user(email="revoke-all@example.com")
+    _, first_token = await issue_tokens(db_session, user)
+    _, second_token = await issue_tokens(db_session, user)
+
+    await revoke_all_refresh_tokens(db_session, user)
+    await db_session.commit()
+
+    with pytest.raises(InvalidRefreshTokenError):
+        await refresh_access_token(db_session, first_token)
+    with pytest.raises(InvalidRefreshTokenError):
+        await refresh_access_token(db_session, second_token)
+
+
+async def test_revoke_all_refresh_tokens_does_not_affect_another_user(db_session: AsyncSession, make_user):
+    target = await make_user(email="revoke-all-target@example.com")
+    other = await make_user(email="revoke-all-other@example.com")
+    _, other_token = await issue_tokens(db_session, other)
+
+    await revoke_all_refresh_tokens(db_session, target)
+    await db_session.commit()
+
+    new_access_token = await refresh_access_token(db_session, other_token)
+    assert decode_access_token(new_access_token)["sub"] == str(other.id)
 
 
 async def test_issue_tokens_sets_last_login_at(db_session: AsyncSession, make_user):

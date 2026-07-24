@@ -15,6 +15,8 @@ still being one central function rather than one `Depends(require_role(...))`
 list per router.
 """
 
+from datetime import UTC, datetime
+
 from fastapi import Depends, HTTPException, status
 from jose import JWTError
 from sqlalchemy import select
@@ -50,6 +52,11 @@ async def enforce_rbac(request: Request, db: AsyncSession = Depends(get_db)) -> 
     user = result.scalar_one_or_none()
     if user is None or not user.is_active:
         raise _UNAUTHENTICATED
+
+    if user.password_changed_at is not None and "iat" in payload:
+        issued_at = datetime.fromtimestamp(payload["iat"], tz=UTC).replace(tzinfo=None)
+        if issued_at < user.password_changed_at:
+            raise _UNAUTHENTICATED
 
     required = getattr(endpoint, "__required_permissions__", None)
     if required and not (user.permission_codes & set(required)):

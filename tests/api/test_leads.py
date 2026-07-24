@@ -974,7 +974,7 @@ async def test_upload_lead_import_csv_creates_leads(client: AsyncClient, make_us
     csv_content = (
         b"first_name,last_name,company,domain,job_title,linkedin_url,email,phone,"
         b"source,status,follow_up_note\n"
-        b"Jane,Doe,Acme Corp,acme.com,VP,linkedin.com/in/jane,jane.upload.csv@acme.com,"
+        b"Jane,Doe,Acme Corp,acme.com,VP,https://linkedin.com/in/jane,jane.upload.csv@acme.com,"
         b"+1 555 0000,website,,\n"
     )
 

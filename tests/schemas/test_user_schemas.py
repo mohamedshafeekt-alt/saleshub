@@ -19,6 +19,15 @@ def test_password_change_rejects_short_new_password():
 
 
 def test_password_change_accepts_valid_new_password():
-    change = PasswordChange(current_password="whatever", new_password="longenoughpassword")
+    change = PasswordChange(current_password="whatever", new_password="Longenough1")
 
-    assert change.new_password == "longenoughpassword"
+    assert change.new_password == "Longenough1"
+
+
+@pytest.mark.parametrize(
+    "new_password",
+    ["alllowercase1", "ALLUPPERCASE1", "NoDigitsHere"],
+)
+def test_password_change_rejects_missing_character_class(new_password: str):
+    with pytest.raises(ValidationError):
+        PasswordChange(current_password="whatever", new_password=new_password)

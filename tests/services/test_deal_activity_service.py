@@ -53,6 +53,16 @@ async def test_create_deal_activity_succeeds(db_session: AsyncSession, make_acco
     assert activity.created_by == owner.id
 
 
+async def test_create_deal_activity_stores_optional_title(db_session: AsyncSession, make_account, make_deal):
+    owner = await _make_user(db_session, "owner-deal-activity-title@example.com", UserRole.SALES_REP)
+    deal = await _make_deal(make_account, make_deal, owner)
+
+    data = DealActivityCreate(title="Discovery Call", type=DealActivityType.MEETING, note="Went well")
+    activity = await create_deal_activity(db_session, deal.id, data, requester=owner)
+
+    assert activity.title == "Discovery Call"
+
+
 async def test_create_deal_activity_raises_not_found_for_missing_deal(db_session: AsyncSession):
     requester = await _make_user(db_session, "deal-activity-requester@example.com", UserRole.SALES_MANAGER)
 

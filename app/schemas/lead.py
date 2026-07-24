@@ -2,10 +2,11 @@
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
 
 from app.models.enums import LeadSource, LeadStatus, LeadTier
 from app.schemas.lead_activity import LeadActivityDetailRead
+from app.schemas.validators import validate_linkedin_url
 
 
 class LeadContactInput(BaseModel):
@@ -50,6 +51,8 @@ class LeadUpsert(BaseModel):
     next_follow_up_date: date | None = None
     follow_up_note: str | None = None
     contacts: list[LeadContactInput] = []
+
+    _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
 
     @model_validator(mode="after")
     def _require_creation_fields_when_no_id(self) -> "LeadUpsert":

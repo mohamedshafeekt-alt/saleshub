@@ -2,6 +2,7 @@
 
 import secrets
 import string
+from datetime import UTC, datetime
 from pathlib import Path
 
 from sqlalchemy import ColumnElement, or_, select
@@ -144,6 +145,10 @@ async def change_password(db: AsyncSession, user: User, current_password: str, n
     if not verify_password(current_password, user.hashed_password):
         raise IncorrectPasswordError("Current password is incorrect")
     user.hashed_password = hash_password(new_password)
+    # Naive UTC: written straight into the (timezone-naive) column with no
+    # server-side tz conversion, so it compares directly against the JWT
+    # "iat" claim (also naive UTC) in rbac_middleware.enforce_rbac.
+    user.password_changed_at = datetime.now(UTC).replace(tzinfo=None)
     await db.flush()
 
 
