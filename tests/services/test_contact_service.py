@@ -1,4 +1,6 @@
-"""app.services.contact_service: plain CRUD on the standalone Contact entity.
+"""app.services.contact_service: plain CRUD on the standalone Contact entity,
+plus role-gated (not ownership-scoped) listing and the Contact Overview
+screen.
 
 Contact has no owner_id and no single owning account (see the module
 docstring on contact_service.py) -- these operations are role-gated only at
@@ -7,11 +9,21 @@ succeed regardless of who's asking; get/update/delete raise
 ContactNotFoundError for a missing id; update_contact applies only fields set
 (partial update). Account-scoped creation/update (with is_primary) is covered
 in tests/services/test_contact_account_service.py instead.
+
+get_contact_overview: derives owner/tier/account from the contact's
+representative Account link (oldest is_primary=True link, else oldest link
+overall, else all null when unlinked); deal_count is real (via DealContact).
+list_contacts: owner_id/account_id/tier/is_primary match if ANY of a
+contact's linked accounts satisfies them; search matches name/email;
+pagination; contacts with zero linked accounts still appear when unfiltered.
 """
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.contact_account import ContactAccount
+from app.models.enums import LeadTier
+from app.models.user import User
 from app.schemas.contact import ContactCreate, ContactUpdate
 from app.services.contact_service import (
     ContactNotFoundError,
@@ -19,8 +31,11 @@ from app.services.contact_service import (
     create_contact,
     delete_contact,
     get_contact,
+    get_contact_overview,
+    list_contacts,
     update_contact,
 )
+from tests.support.roles import UserRole, role_id_for
 
 
 async def test_create_contact_succeeds(db_session: AsyncSession):
@@ -37,6 +52,7 @@ async def test_create_contact_succeeds(db_session: AsyncSession):
 async def test_create_contact_with_linkedin_and_alternate_phone(db_session: AsyncSession):
     data = ContactCreate(
         first_name="Jane",
+        email="jane-linkedin@example.com",
         linkedin_url="https://linkedin.com/in/jane",
         phone="555-0001",
         alternate_phone="555-0002",
@@ -49,13 +65,22 @@ async def test_create_contact_with_linkedin_and_alternate_phone(db_session: Asyn
     assert contact.alternate_phone == "555-0002"
 
 
+async def test_create_contact_raises_duplicate_email_for_existing_email(db_session: AsyncSession):
+    await create_contact(db_session, ContactCreate(first_name="Jane", email="dup-contact@example.com"))
+
+    with pytest.raises(DuplicateContactEmailError):
+        await create_contact(
+            db_session, ContactCreate(first_name="Someone Else", email="dup-contact@example.com")
+        )
+
+
 async def test_get_contact_raises_not_found_for_missing_id(db_session: AsyncSession):
     with pytest.raises(ContactNotFoundError):
         await get_contact(db_session, contact_id=999_999)
 
 
 async def test_get_contact_succeeds(db_session: AsyncSession):
-    created = await create_contact(db_session, ContactCreate(first_name="Getable"))
+    created = await create_contact(db_session, ContactCreate(first_name="Getable", email="getable@example.com"))
 
     fetched = await get_contact(db_session, contact_id=created.id)
 
@@ -69,7 +94,8 @@ async def test_update_contact_raises_not_found_for_missing_id(db_session: AsyncS
 
 async def test_update_contact_applies_partial_changes(db_session: AsyncSession):
     created = await create_contact(
-        db_session, ContactCreate(first_name="Old", last_name="Name", job_title="Old Title")
+        db_session,
+        ContactCreate(first_name="Old", last_name="Name", email="old-name@example.com", job_title="Old Title"),
     )
 
     updated = await update_contact(db_session, contact_id=created.id, data=ContactUpdate(first_name="New"))
@@ -100,10 +126,227 @@ async def test_delete_contact_raises_not_found_for_missing_id(db_session: AsyncS
 
 
 async def test_delete_contact_removes_the_row(db_session: AsyncSession):
-    created = await create_contact(db_session, ContactCreate(first_name="To Delete"))
+    created = await create_contact(db_session, ContactCreate(first_name="To Delete", email="to-delete@example.com"))
     contact_id = created.id
 
     await delete_contact(db_session, contact_id=contact_id)
 
     with pytest.raises(ContactNotFoundError):
         await get_contact(db_session, contact_id=contact_id)
+
+
+async def _make_user(db_session: AsyncSession, email: str, role: UserRole, first_name: str = "Test") -> User:
+    user = User(email=email, hashed_password="x", first_name=first_name, role_id=await role_id_for(db_session, role))
+    db_session.add(user)
+    await db_session.flush()
+    await db_session.refresh(user, attribute_names=["role"])
+    return user
+
+
+# --- get_contact_overview -----------------------------------------------------
+
+
+async def test_get_contact_overview_raises_not_found_for_missing_id(db_session: AsyncSession):
+    with pytest.raises(ContactNotFoundError):
+        await get_contact_overview(db_session, contact_id=999_999)
+
+
+async def test_get_contact_overview_with_no_linked_accounts_returns_null_derived_fields(
+    db_session: AsyncSession,
+):
+    created = await create_contact(db_session, ContactCreate(first_name="Unlinked", email="unlinked@example.com"))
+
+    contact, account_link, deal_count = await get_contact_overview(db_session, created.id)
+
+    assert contact.id == created.id
+    assert account_link is None
+    assert deal_count == 0
+
+
+async def test_get_contact_overview_derives_owner_tier_account_from_single_link(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner = await _make_user(db_session, "owner-overview-single@example.com", UserRole.SALES_REP, "Karthick")
+    account = await make_account(owner_id=owner.id, company="Nexbridge Tech", tier=LeadTier.GOLD)
+    created = await make_contact(account_id=account.id, first_name="Sarah", is_primary=True)
+
+    contact, account_link, _deal_count = await get_contact_overview(db_session, created.id)
+
+    assert account_link is not None
+    assert account_link.is_primary is True
+    assert account_link.account.id == account.id
+    assert account_link.account.company == "Nexbridge Tech"
+    assert account_link.account.tier == LeadTier.GOLD
+    assert account_link.account.owner_id == owner.id
+    assert account_link.account.owner_name == "Karthick"
+
+
+async def test_get_contact_overview_prefers_oldest_primary_link_when_multiple_accounts(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner = await _make_user(db_session, "owner-overview-tiebreak@example.com", UserRole.SALES_REP)
+    account_a = await make_account(owner_id=owner.id, company="Account A")
+    account_b = await make_account(owner_id=owner.id, company="Account B")
+    account_c = await make_account(owner_id=owner.id, company="Account C")
+    contact = await make_contact(account_id=account_a.id, first_name="Multi", is_primary=False)
+
+    db_session.add(ContactAccount(contact_id=contact.id, account_id=account_b.id, is_primary=True))
+    db_session.add(ContactAccount(contact_id=contact.id, account_id=account_c.id, is_primary=True))
+    await db_session.flush()
+
+    _contact, account_link, _deal_count = await get_contact_overview(db_session, contact.id)
+
+    assert account_link is not None
+    assert account_link.account.company == "Account B"  # oldest is_primary=True link
+
+
+async def test_get_contact_overview_falls_back_to_oldest_link_when_none_primary(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner = await _make_user(db_session, "owner-overview-fallback@example.com", UserRole.SALES_REP)
+    account_a = await make_account(owner_id=owner.id, company="First Linked Co")
+    account_b = await make_account(owner_id=owner.id, company="Second Linked Co")
+    contact = await make_contact(account_id=account_a.id, first_name="Neither Primary", is_primary=False)
+
+
+    db_session.add(ContactAccount(contact_id=contact.id, account_id=account_b.id, is_primary=False))
+    await db_session.flush()
+
+    _contact, account_link, _deal_count = await get_contact_overview(db_session, contact.id)
+
+    assert account_link is not None
+    assert account_link.account.company == "First Linked Co"  # oldest link overall
+
+
+async def test_get_contact_overview_deal_count_reflects_linked_deals(
+    db_session: AsyncSession, make_account, make_contact, make_deal
+):
+    owner = await _make_user(db_session, "owner-overview-deals@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Deal Count Co")
+    contact = await make_contact(account_id=account.id)
+    other_contact = await make_contact(account_id=account.id, email="other-overview-deals@example.com")
+    await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Deal One", contact_ids=[contact.id])
+    await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Deal Two", contact_ids=[contact.id])
+    await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Other's Deal", contact_ids=[other_contact.id]
+    )
+
+    _contact, _account_link, deal_count = await get_contact_overview(db_session, contact.id)
+
+    assert deal_count == 2
+
+
+# --- list_contacts -------------------------------------------------------------
+
+
+async def test_list_contacts_filters_by_owner_id(db_session: AsyncSession, make_account, make_contact):
+    owner_a = await _make_user(db_session, "owner-a-list-contacts@example.com", UserRole.SALES_REP)
+    owner_b = await _make_user(db_session, "owner-b-list-contacts@example.com", UserRole.SALES_REP)
+    account_a = await make_account(owner_id=owner_a.id, company="Owner A Co")
+    account_b = await make_account(owner_id=owner_b.id, company="Owner B Co")
+    contact_a = await make_contact(account_id=account_a.id, first_name="Owned By A")
+    await make_contact(account_id=account_b.id, first_name="Owned By B")
+
+    items, total = await list_contacts(db_session, owner_id=owner_a.id)
+
+    assert total == 1
+    assert [contact.id for contact, _link in items] == [contact_a.id]
+
+
+async def test_list_contacts_filters_by_account_id(db_session: AsyncSession, make_account, make_contact):
+    owner = await _make_user(db_session, "owner-list-by-account@example.com", UserRole.SALES_REP)
+    account_a = await make_account(owner_id=owner.id, company="List Account A")
+    account_b = await make_account(owner_id=owner.id, company="List Account B")
+    contact_a = await make_contact(account_id=account_a.id, first_name="In Account A")
+    await make_contact(account_id=account_b.id, first_name="In Account B")
+
+    items, total = await list_contacts(db_session, account_id=account_a.id)
+
+    assert total == 1
+    assert [contact.id for contact, _link in items] == [contact_a.id]
+
+
+async def test_list_contacts_filters_by_tier(db_session: AsyncSession, make_account, make_contact):
+    owner = await _make_user(db_session, "owner-list-by-tier@example.com", UserRole.SALES_REP)
+    gold_account = await make_account(owner_id=owner.id, company="Gold Co", tier=LeadTier.GOLD)
+    silver_account = await make_account(owner_id=owner.id, company="Silver Co", tier=LeadTier.SILVER)
+    gold_contact = await make_contact(account_id=gold_account.id, first_name="Gold Contact")
+    await make_contact(account_id=silver_account.id, first_name="Silver Contact")
+
+    items, total = await list_contacts(db_session, tier=LeadTier.GOLD)
+
+    assert total == 1
+    assert [contact.id for contact, _link in items] == [gold_contact.id]
+
+
+async def test_list_contacts_filters_by_is_primary(db_session: AsyncSession, make_account, make_contact):
+    owner = await _make_user(db_session, "owner-list-by-primary@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Primary Filter Co")
+    primary_contact = await make_contact(account_id=account.id, first_name="Primary One", is_primary=True)
+    await make_contact(account_id=account.id, first_name="Secondary One", is_primary=False)
+
+    items, total = await list_contacts(db_session, is_primary=True)
+
+    assert total == 1
+    assert [contact.id for contact, _link in items] == [primary_contact.id]
+
+
+async def test_list_contacts_search_matches_name_or_email(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner = await _make_user(db_session, "owner-list-search@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Search Co")
+    jane = await make_contact(account_id=account.id, first_name="Jane", email="jane-search@example.com")
+    await make_contact(account_id=account.id, first_name="Someone", last_name="Else")
+
+    items, _total = await list_contacts(db_session, search="jane")
+
+    assert [contact.id for contact, _link in items] == [jane.id]
+
+
+async def test_list_contacts_pagination_limit_offset(db_session: AsyncSession, make_account, make_contact):
+    owner = await _make_user(db_session, "owner-list-pagination@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Pagination Co")
+    for i in range(3):
+        await make_contact(account_id=account.id, first_name=f"Paged {i}")
+
+    items, total = await list_contacts(db_session, account_id=account.id, limit=2, offset=1)
+
+    assert total == 3
+    assert len(items) == 2
+
+
+async def test_list_contacts_no_filters_returns_all_contacts_including_unlinked(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner = await _make_user(db_session, "owner-list-unfiltered@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Unfiltered Co")
+    linked = await make_contact(account_id=account.id, first_name="Linked")
+    unlinked = await create_contact(
+        db_session, ContactCreate(first_name="Unlinked Contact", email="unlinked-contact@example.com")
+    )
+
+    items, _total = await list_contacts(db_session)
+
+    ids = {contact.id for contact, _link in items}
+    assert linked.id in ids
+    assert unlinked.id in ids
+
+
+async def test_list_contacts_owner_filter_matches_any_of_multiple_linked_accounts(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner_a = await _make_user(db_session, "owner-a-multi-link@example.com", UserRole.SALES_REP)
+    owner_b = await _make_user(db_session, "owner-b-multi-link@example.com", UserRole.SALES_REP)
+    account_a = await make_account(owner_id=owner_a.id, company="Multi Link Account A")
+    account_b = await make_account(owner_id=owner_b.id, company="Multi Link Account B")
+    contact = await make_contact(account_id=account_a.id, first_name="Multi Linked")
+
+
+    db_session.add(ContactAccount(contact_id=contact.id, account_id=account_b.id, is_primary=False))
+    await db_session.flush()
+
+    items, total = await list_contacts(db_session, owner_id=owner_b.id)
+
+    assert total == 1
+    assert [c.id for c, _link in items] == [contact.id]

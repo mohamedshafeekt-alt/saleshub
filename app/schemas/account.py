@@ -13,26 +13,21 @@ class AccountContactInput(BaseModel):
     form's "Save & Convert to Account" action).
 
     Only the first contact in the request's `contacts` list is required to
-    carry first_name/last_name; any contact after it needs just email and/or
-    phone -- create_account fills in the missing name from the first contact,
-    since Contact.first_name is NOT NULL. At most one contact in the whole
-    list may set is_primary=True (enforced alongside any pre-existing
-    primary contact by create_account/update_account -- see
-    PrimaryContactAlreadyExistsError).
+    carry first_name/last_name -- create_account fills in the missing name
+    from the first contact, since Contact.first_name is NOT NULL. email is
+    required on every contact (Contact.email is NOT NULL and globally
+    unique); phone is purely optional, no longer an alternative to email. At
+    most one contact in the whole list may set is_primary=True (enforced
+    alongside any pre-existing primary contact by create_account/
+    update_account -- see PrimaryContactAlreadyExistsError).
     """
 
     first_name: str | None = None
     last_name: str | None = None
-    email: EmailStr | None = None
+    email: EmailStr
     phone: str | None = None
     job_title: str | None = None
     is_primary: bool = False
-
-    @model_validator(mode="after")
-    def _require_email_or_phone(self) -> "AccountContactInput":
-        if self.email is None and self.phone is None:
-            raise ValueError("A contact needs at least one of email or phone")
-        return self
 
 
 class AccountCreate(BaseModel):

@@ -6,14 +6,19 @@ for a non-owning Sales Rep (get/update/delete), 200 list scoped by role and by
 each filter (owner_id/tier/industry/search-by-company-or-domain), 404 for a
 missing account, 200 partial PATCH, 204 DELETE. Every Account response
 (create/get/list) carries owner_name plus contact_count/deal_count. Plus
-create-time `contacts`: saved to the `contacts` table with the new account's
-id as FK, only the first needs a name (422 if it doesn't), later ones
-inherit it and just need email and/or phone (422 if neither). Plus GET
+create-time `contacts`: saved to the `contacts` table (linked via
+`contact_accounts`), only the first needs a name (422 if it doesn't), every
+contact needs its own email (422 if missing, 409 if already used by another
+contact -- Contact.email is globally unique); phone is optional, no longer
+an alternative to email. Plus GET
 /accounts/{account_id}/contacts: 200 scoped to that account's contacts, 404
 for a nonexistent account, 403 for a non-owning Sales Rep. Plus GET
 /accounts/{account_id}/deals: 200 scoped to that account's deals (gated on
 the ACCOUNT's ownership, not deal ownership), 404 for a nonexistent account,
-403 for a non-owning Sales Rep on the account.
+403 for a non-owning Sales Rep on the account. Plus Account Documents
+(upload/list/delete under /accounts/{id}/documents): 201 upload, 400
+unsupported content type, 404 for a nonexistent account, 403 for a
+non-owning Sales Rep, 200 list + 204 delete.
 """
 
 from httpx import AsyncClient
@@ -303,7 +308,7 @@ async def test_create_account_first_contact_missing_first_name_returns_422(
     assert response.status_code == 422
 
 
-async def test_create_account_second_contact_without_email_or_phone_returns_422(
+async def test_create_account_second_contact_missing_email_returns_422(
     client: AsyncClient, make_user, auth_headers
 ):
     rep = await make_user(email="rep-create-acc-bad-contact@example.com", role=UserRole.SALES_REP)
@@ -315,7 +320,7 @@ async def test_create_account_second_contact_without_email_or_phone_returns_422(
             owner_id=rep.id,
             contacts=[
                 {"first_name": "Jane", "email": "jane@example.com"},
-                {"email": None, "phone": None},
+                {"email": None, "phone": "+1-555-0100"},
             ],
         ),
         headers=headers,
@@ -815,7 +820,9 @@ async def test_create_account_contact_returns_404_for_nonexistent_account(
     headers = auth_headers(rep)
 
     response = await client.post(
-        f"{ACCOUNTS_URL}/999999/contacts", json={"first_name": "Jane"}, headers=headers
+        f"{ACCOUNTS_URL}/999999/contacts",
+        json={"first_name": "Jane", "email": "jane-404-acc-contact@example.com"},
+        headers=headers,
     )
 
     assert response.status_code == 404
@@ -832,7 +839,9 @@ async def test_create_account_contact_returns_403_for_non_owning_sales_rep(
     headers = auth_headers(other_rep)
 
     response = await client.post(
-        f"{ACCOUNTS_URL}/{account.id}/contacts", json={"first_name": "Jane"}, headers=headers
+        f"{ACCOUNTS_URL}/{account.id}/contacts",
+        json={"first_name": "Jane", "email": "jane-403-acc-contact@example.com"},
+        headers=headers,
     )
 
     assert response.status_code == 403
@@ -846,14 +855,36 @@ async def test_create_account_contact_returns_409_when_primary_already_exists(
     headers = auth_headers(owner)
     first = await client.post(
         f"{ACCOUNTS_URL}/{account.id}/contacts",
-        json={"first_name": "First", "is_primary": True},
+        json={"first_name": "First", "email": "first-409-primary@example.com", "is_primary": True},
         headers=headers,
     )
     assert first.status_code == 201
 
     response = await client.post(
         f"{ACCOUNTS_URL}/{account.id}/contacts",
-        json={"first_name": "Second", "is_primary": True},
+        json={"first_name": "Second", "email": "second-409-primary@example.com", "is_primary": True},
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+
+
+async def test_create_account_contact_returns_409_when_email_already_exists(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    owner = await make_user(email="rep-create-acc-contact-dup-email@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Dup Email Co")
+    headers = auth_headers(owner)
+    first = await client.post(
+        f"{ACCOUNTS_URL}/{account.id}/contacts",
+        json={"first_name": "Original", "email": "dup-acc-contact@example.com"},
+        headers=headers,
+    )
+    assert first.status_code == 201
+
+    response = await client.post(
+        f"{ACCOUNTS_URL}/{account.id}/contacts",
+        json={"first_name": "Different Name", "email": "dup-acc-contact@example.com"},
         headers=headers,
     )
 
@@ -871,7 +902,7 @@ async def test_upsert_account_contact_with_contact_id_returns_200(
     headers = auth_headers(owner)
     create_response = await client.post(
         f"{ACCOUNTS_URL}/{account.id}/contacts",
-        json={"first_name": "Old", "job_title": "Old Title"},
+        json={"first_name": "Old", "email": "old-upsert-contact@example.com", "job_title": "Old Title"},
         headers=headers,
     )
     contact_id = create_response.json()["id"]
@@ -915,7 +946,9 @@ async def test_upsert_account_contact_with_contact_id_returns_403_for_non_owning
     account = await make_account(owner_id=owner.id, company="Update Forbidden Co")
     headers = auth_headers(owner)
     create_response = await client.post(
-        f"{ACCOUNTS_URL}/{account.id}/contacts", json={"first_name": "Jane"}, headers=headers
+        f"{ACCOUNTS_URL}/{account.id}/contacts",
+        json={"first_name": "Jane", "email": "jane-update-forbidden@example.com"},
+        headers=headers,
     )
     contact_id = create_response.json()["id"]
 
@@ -936,11 +969,13 @@ async def test_upsert_account_contact_returns_409_promoting_second_primary(
     headers = auth_headers(owner)
     await client.post(
         f"{ACCOUNTS_URL}/{account.id}/contacts",
-        json={"first_name": "Existing", "is_primary": True},
+        json={"first_name": "Existing", "email": "existing-promote@example.com", "is_primary": True},
         headers=headers,
     )
     second = await client.post(
-        f"{ACCOUNTS_URL}/{account.id}/contacts", json={"first_name": "Second"}, headers=headers
+        f"{ACCOUNTS_URL}/{account.id}/contacts",
+        json={"first_name": "Second", "email": "second-promote@example.com"},
+        headers=headers,
     )
     second_id = second.json()["id"]
 
@@ -961,7 +996,9 @@ async def test_upsert_account_contact_creates_link_for_existing_contact_new_acco
     account_b = await make_account(owner_id=owner.id, company="Destination Co")
     headers = auth_headers(owner)
     create_response = await client.post(
-        f"{ACCOUNTS_URL}/{account_a.id}/contacts", json={"first_name": "Shared"}, headers=headers
+        f"{ACCOUNTS_URL}/{account_a.id}/contacts",
+        json={"first_name": "Shared", "email": "shared-relink@example.com"},
+        headers=headers,
     )
     contact_id = create_response.json()["id"]
 
@@ -1019,3 +1056,106 @@ async def test_list_deals_for_account_returns_403_for_non_owning_sales_rep(
     response = await client.get(f"{ACCOUNTS_URL}/{account.id}/deals", headers=headers)
 
     assert response.status_code == 403
+
+
+# --- Account Documents (upload/list/delete under /accounts/{id}/documents) --
+
+
+async def test_upload_account_document_returns_201(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    owner = await make_user(email="rep-upload-acc-doc@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Upload Doc Co")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        f"{ACCOUNTS_URL}/{account.id}/documents",
+        files={"file": ("proposal.pdf", b"%PDF-1.4 fake", "application/pdf")},
+        headers=headers,
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["account_id"] == account.id
+    assert body["file_name"] == "proposal.pdf"
+    assert body["content_type"] == "application/pdf"
+    assert body["uploaded_by"] == owner.id
+    assert body["file_url"].startswith("/media/account_documents/")
+
+    import pathlib
+
+    pathlib.Path(body["file_url"].lstrip("/")).unlink()
+
+
+async def test_upload_account_document_rejects_unsupported_type_returns_400(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    owner = await make_user(email="rep-upload-acc-doc-bad-type@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Bad Type Doc Co")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        f"{ACCOUNTS_URL}/{account.id}/documents",
+        files={"file": ("virus.exe", b"whatever", "application/x-msdownload")},
+        headers=headers,
+    )
+
+    assert response.status_code == 400
+
+
+async def test_upload_account_document_returns_404_for_nonexistent_account(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-upload-acc-doc-404@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        f"{ACCOUNTS_URL}/999999/documents",
+        files={"file": ("x.pdf", b"x", "application/pdf")},
+        headers=headers,
+    )
+
+    assert response.status_code == 404
+
+
+async def test_upload_account_document_returns_403_for_non_owning_sales_rep(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    owner = await make_user(email="rep-owns-acc-doc@example.com", role=UserRole.SALES_REP)
+    other_rep = await make_user(email="rep-not-owner-acc-doc@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Forbidden Doc Co")
+
+    response = await client.post(
+        f"{ACCOUNTS_URL}/{account.id}/documents",
+        files={"file": ("x.pdf", b"x", "application/pdf")},
+        headers=auth_headers(other_rep),
+    )
+
+    assert response.status_code == 403
+
+
+async def test_list_and_delete_account_documents(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    owner = await make_user(email="rep-list-delete-acc-doc@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="List Delete Doc Co")
+    headers = auth_headers(owner)
+    created = (
+        await client.post(
+            f"{ACCOUNTS_URL}/{account.id}/documents",
+            files={"file": ("proposal.pdf", b"content", "application/pdf")},
+            headers=headers,
+        )
+    ).json()
+
+    list_response = await client.get(f"{ACCOUNTS_URL}/{account.id}/documents", headers=headers)
+    assert list_response.status_code == 200
+    assert [doc["id"] for doc in list_response.json()] == [created["id"]]
+
+    delete_response = await client.delete(
+        f"{ACCOUNTS_URL}/{account.id}/documents/{created['id']}", headers=headers
+    )
+    assert delete_response.status_code == 204
+
+    list_after_delete = await client.get(f"{ACCOUNTS_URL}/{account.id}/documents", headers=headers)
+    assert list_after_delete.json() == []

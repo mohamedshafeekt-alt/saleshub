@@ -39,6 +39,7 @@ from app.services.deal_service import (
     list_deals,
     list_deals_board,
     list_deals_for_account,
+    list_deals_for_contact,
     list_stage_history,
     update_deal,
 )
@@ -842,6 +843,60 @@ async def test_list_deals_for_account_returns_deals_scoped_to_that_account(
     results = await list_deals_for_account(db_session, account_id=account_a.id, requester=owner)
 
     assert [deal.id for deal in results] == [deal_a.id]
+
+
+# --- list_deals_for_contact ---------------------------------------------------
+
+
+async def test_list_deals_for_contact_raises_not_found_for_missing_contact(db_session: AsyncSession):
+    with pytest.raises(ContactNotFoundError):
+        await list_deals_for_contact(db_session, contact_id=999_999)
+
+
+async def test_list_deals_for_contact_returns_empty_list_when_no_deals_linked(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner = await _make_user(db_session, "owner-contact-deals-empty@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="No Deals Co")
+    contact = await make_contact(account_id=account.id)
+
+    results = await list_deals_for_contact(db_session, contact_id=contact.id)
+
+    assert results == []
+
+
+async def test_list_deals_for_contact_returns_linked_deals(
+    db_session: AsyncSession, make_account, make_contact, make_deal
+):
+    owner = await _make_user(db_session, "owner-contact-deals@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Contact Deals Co")
+    contact = await make_contact(account_id=account.id)
+    deal_a = await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Contact Deal A", contact_ids=[contact.id]
+    )
+    deal_b = await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Contact Deal B", contact_ids=[contact.id]
+    )
+
+    results = await list_deals_for_contact(db_session, contact_id=contact.id)
+
+    assert {deal.id for deal in results} == {deal_a.id, deal_b.id}
+
+
+async def test_list_deals_for_contact_excludes_deals_for_other_contacts(
+    db_session: AsyncSession, make_account, make_contact, make_deal
+):
+    owner = await _make_user(db_session, "owner-contact-deals-excl@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Contact Deals Excl Co")
+    contact = await make_contact(account_id=account.id)
+    other_contact = await make_contact(account_id=account.id, email="other-contact-deals-excl@example.com")
+    await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Other's Deal", contact_ids=[other_contact.id]
+    )
+
+    results = await list_deals_for_contact(db_session, contact_id=contact.id)
+
+    assert results == []
 
 
 # --- export_deals ------------------------------------------------------------

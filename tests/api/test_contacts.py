@@ -6,7 +6,13 @@ no single owning account -- see contact_service.py's module docstring).
 Covers: 201 create as each allowed role, 422 missing required field, 401 no
 auth, 403 for Delivery SME, 200 successful get/PATCH partial update, 204
 successful DELETE, 404 for a nonexistent contact id.
+
+Also covers the Contacts List (GET /contacts, filters + pagination), Contact
+Overview (GET /contacts/{id}/overview), and Contact Deals (GET
+/contacts/{id}/deals) screens.
 """
+
+import uuid
 
 from httpx import AsyncClient
 
@@ -16,7 +22,11 @@ CONTACTS_URL = "/api/v1/contacts"
 
 
 def _contact_payload(**overrides) -> dict:
-    payload = {"first_name": "Jane"}
+    # email defaults to a random unique address (Contact.email is NOT NULL
+    # and globally unique) rather than a fixed constant, so calls in
+    # different tests don't collide unless they explicitly pass the same
+    # email on purpose (e.g. the duplicate-email tests).
+    payload = {"first_name": "Jane", "email": f"jane-{uuid.uuid4().hex[:12]}@example.com"}
     payload.update(overrides)
     return payload
 
@@ -74,6 +84,27 @@ async def test_create_contact_with_linkedin_and_alternate_phone_returns_201(
     assert body["alternate_phone"] == "555-0002"
 
 
+async def test_create_contact_returns_409_when_email_already_exists(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-create-contact-dup-email@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+    first = await client.post(
+        CONTACTS_URL,
+        json=_contact_payload(first_name="Original", email="dup-contact-api@example.com"),
+        headers=headers,
+    )
+    assert first.status_code == 201
+
+    response = await client.post(
+        CONTACTS_URL,
+        json=_contact_payload(first_name="Different Name", email="dup-contact-api@example.com"),
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+
+
 async def test_create_contact_missing_first_name_returns_422(
     client: AsyncClient, make_user, auth_headers
 ):
@@ -81,6 +112,17 @@ async def test_create_contact_missing_first_name_returns_422(
     headers = auth_headers(rep)
     payload = _contact_payload()
     del payload["first_name"]
+
+    response = await client.post(CONTACTS_URL, json=payload, headers=headers)
+
+    assert response.status_code == 422
+
+
+async def test_create_contact_missing_email_returns_422(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-missing-email-contact@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+    payload = _contact_payload()
+    del payload["email"]
 
     response = await client.post(CONTACTS_URL, json=payload, headers=headers)
 
@@ -173,5 +215,122 @@ async def test_delete_contact_returns_404_for_nonexistent_id(client: AsyncClient
     headers = auth_headers(rep)
 
     response = await client.delete(f"{CONTACTS_URL}/999999", headers=headers)
+
+    assert response.status_code == 404
+
+
+# --- GET /contacts (list) -----------------------------------------------------
+
+
+async def test_list_contacts_route_returns_200_paginated(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    rep = await make_user(email="rep-list-contacts-api@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+    account = await make_account(owner_id=rep.id, company="List API Co")
+    contact = await make_contact(account_id=account.id, first_name="Listed")
+
+    response = await client.get(CONTACTS_URL, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["total"] >= 1
+    assert any(item["id"] == contact.id for item in body["items"])
+
+
+async def test_list_contacts_route_filters_by_owner_id(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    owner_a = await make_user(email="owner-a-list-contacts-api@example.com", role=UserRole.SALES_REP)
+    owner_b = await make_user(email="owner-b-list-contacts-api@example.com", role=UserRole.SALES_REP)
+    account_a = await make_account(owner_id=owner_a.id, company="List API Owner A Co")
+    account_b = await make_account(owner_id=owner_b.id, company="List API Owner B Co")
+    contact_a = await make_contact(account_id=account_a.id, first_name="Owned By A API")
+    await make_contact(account_id=account_b.id, first_name="Owned By B API")
+    headers = auth_headers(owner_a)
+
+    response = await client.get(CONTACTS_URL, params={"owner_id": owner_a.id}, headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body["items"]] == [contact_a.id]
+
+
+async def test_list_contacts_route_no_auth_header_returns_401(client: AsyncClient):
+    response = await client.get(CONTACTS_URL)
+
+    assert response.status_code == 401
+
+
+# --- GET /contacts/{id}/overview -----------------------------------------------
+
+
+async def test_get_contact_overview_route_returns_200(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    owner = await make_user(email="owner-overview-api@example.com", role=UserRole.SALES_REP, first_name="Karthick")
+    headers = auth_headers(owner)
+    account = await make_account(owner_id=owner.id, company="Nexbridge Tech", tier="gold")
+    contact = await make_contact(account_id=account.id, first_name="Sarah", job_title="CTO", is_primary=True)
+
+    response = await client.get(f"{CONTACTS_URL}/{contact.id}/overview", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["id"] == contact.id
+    assert body["first_name"] == "Sarah"
+    assert body["job_title"] == "CTO"
+    assert body["is_primary"] is True
+    assert body["account_id"] == account.id
+    assert body["account_name"] == "Nexbridge Tech"
+    assert body["owner_id"] == owner.id
+    assert body["owner_name"] == "Karthick"
+    assert body["tier"] == "gold"
+    assert body["deal_count"] == 0
+    assert body["task_count"] is None
+    assert body["log_count"] is None
+    assert body["tags"] is None
+    assert body["about"] is None
+
+
+async def test_get_contact_overview_route_returns_404_for_nonexistent_id(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-overview-404-api@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(f"{CONTACTS_URL}/999999/overview", headers=headers)
+
+    assert response.status_code == 404
+
+
+# --- GET /contacts/{id}/deals --------------------------------------------------
+
+
+async def test_list_contact_deals_route_returns_200(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact, make_deal
+):
+    owner = await make_user(email="owner-contact-deals-api@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(owner)
+    account = await make_account(owner_id=owner.id, company="Contact Deals API Co")
+    contact = await make_contact(account_id=account.id)
+    deal = await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Contact Deal API", contact_ids=[contact.id]
+    )
+
+    response = await client.get(f"{CONTACTS_URL}/{contact.id}/deals", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [item["id"] for item in body] == [deal.id]
+
+
+async def test_list_contact_deals_route_returns_404_for_nonexistent_id(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-contact-deals-404-api@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(f"{CONTACTS_URL}/999999/deals", headers=headers)
 
     assert response.status_code == 404
