@@ -18,6 +18,7 @@ class DealActivity(Base):
     __tablename__ = "deal_activities"
 
     deal_id: Mapped[int] = mapped_column(ForeignKey("deals.id", ondelete="CASCADE"), nullable=False, index=True)
+    title: Mapped[str | None] = mapped_column(nullable=True)
     type: Mapped[DealActivityType] = mapped_column(
         Enum(DealActivityType, name="deal_activity_type", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
         nullable=False,

@@ -26,7 +26,9 @@ async def create_deal_activity(
 ) -> DealActivity:
     await get_deal(db, deal_id, requester)
 
-    activity = DealActivity(deal_id=deal_id, type=data.type, note=data.note, created_by=requester.id)
+    activity = DealActivity(
+        deal_id=deal_id, title=data.title, type=data.type, note=data.note, created_by=requester.id
+    )
     db.add(activity)
     await db.flush()
     return activity

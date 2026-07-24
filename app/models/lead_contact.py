@@ -17,5 +17,5 @@ class LeadContact(Base):
     __tablename__ = "lead_contacts"
 
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True)
-    email: Mapped[str | None] = mapped_column(nullable=True)
+    email: Mapped[str | None] = mapped_column(unique=True, index=True, nullable=True)
     phone: Mapped[str | None] = mapped_column(nullable=True)

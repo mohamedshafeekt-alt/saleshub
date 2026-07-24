@@ -8,6 +8,7 @@ from app.models.enums import DealActivityType
 
 
 class DealActivityCreate(BaseModel):
+    title: str | None = None
     type: DealActivityType
     note: str = Field(min_length=1)
 
@@ -15,6 +16,7 @@ class DealActivityCreate(BaseModel):
 class DealActivityUpdate(BaseModel):
     """Partial update: only supplied fields are applied."""
 
+    title: str | None = None
     type: DealActivityType | None = None
     note: str | None = Field(default=None, min_length=1)
 
@@ -24,6 +26,7 @@ class DealActivityRead(BaseModel):
 
     id: int
     deal_id: int
+    title: str | None
     type: DealActivityType
     note: str
     created_by: int

@@ -437,7 +437,7 @@ async def test_change_password_with_correct_current_password_returns_204(
 
     response = await client.post(
         ME_PASSWORD_URL,
-        json={"current_password": "correct-password", "new_password": "brand-new-password"},
+        json={"current_password": "correct-password", "new_password": "BrandNewPass1"},
         headers=headers,
     )
 
@@ -445,7 +445,7 @@ async def test_change_password_with_correct_current_password_returns_204(
 
     login_response = await client.post(
         "/api/v1/auth/login",
-        json={"email": "change-pw@example.com", "password": "brand-new-password"},
+        json={"email": "change-pw@example.com", "password": "BrandNewPass1"},
     )
     assert login_response.status_code == 200
 
@@ -458,11 +458,47 @@ async def test_change_password_wrong_current_password_returns_400(
 
     response = await client.post(
         ME_PASSWORD_URL,
-        json={"current_password": "wrong-password", "new_password": "brand-new-password"},
+        json={"current_password": "wrong-password", "new_password": "BrandNewPass1"},
         headers=headers,
     )
 
     assert response.status_code == 400
+
+
+async def test_change_password_rejects_current_access_token_afterwards(
+    client: AsyncClient, make_user, auth_headers
+):
+    user = await make_user(email="change-pw-forces-logout@example.com", password="correct-password", role=UserRole.SALES_REP)
+    headers = auth_headers(user)
+
+    response = await client.post(
+        ME_PASSWORD_URL,
+        json={"current_password": "correct-password", "new_password": "BrandNewPass1"},
+        headers=headers,
+    )
+    assert response.status_code == 204
+
+    me_response = await client.get(f"{USERS_URL}/me", headers=headers)
+    assert me_response.status_code == 401
+
+
+async def test_change_password_revokes_existing_refresh_token(client: AsyncClient, make_user, auth_headers):
+    user = await make_user(email="change-pw-revokes-refresh@example.com", password="correct-password", role=UserRole.SALES_REP)
+    login_response = await client.post(
+        "/api/v1/auth/login",
+        json={"email": "change-pw-revokes-refresh@example.com", "password": "correct-password"},
+    )
+    refresh_token = login_response.json()["refresh_token"]
+    headers = auth_headers(user)
+
+    await client.post(
+        ME_PASSWORD_URL,
+        json={"current_password": "correct-password", "new_password": "BrandNewPass1"},
+        headers=headers,
+    )
+
+    refresh_response = await client.post("/api/v1/auth/refresh", json={"refresh_token": refresh_token})
+    assert refresh_response.status_code == 401
 
 
 async def test_change_password_too_short_returns_422(client: AsyncClient, make_user, auth_headers):

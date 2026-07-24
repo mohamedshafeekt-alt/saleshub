@@ -10,6 +10,7 @@ from app.core.rbac import requires_permission
 from app.db.session import get_db
 from app.models.user import User, UserStatus
 from app.schemas.user import PasswordChange, UserCreate, UserRead, UserUpdate
+from app.services import auth_service
 from app.services.email.sender import EmailSender
 from app.services.user_service import (
     EmailAlreadyExistsError,
@@ -73,6 +74,9 @@ async def change_my_password(
     except IncorrectPasswordError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    # Force every other session (and the current access token, per
+    # rbac_middleware.enforce_rbac's iat check) to log in again.
+    await auth_service.revoke_all_refresh_tokens(db, current_user)
     await db.commit()
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 

@@ -22,6 +22,7 @@ class User(Base):
     phone_number: Mapped[str | None] = mapped_column(nullable=True)
     avatar_url: Mapped[str | None] = mapped_column(nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(nullable=True)
+    password_changed_at: Mapped[datetime | None] = mapped_column(nullable=True)
     role_id: Mapped[int] = mapped_column(ForeignKey("roles.id"), nullable=False)
 
     role: Mapped["Role"] = relationship(lazy="selectin")

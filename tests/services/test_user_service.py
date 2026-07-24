@@ -251,6 +251,15 @@ async def test_change_password_wrong_current_password_raises(db_session: AsyncSe
         await change_password(db_session, user, "totally-wrong", "brand-new-password")
 
 
+async def test_change_password_sets_password_changed_at(db_session: AsyncSession):
+    user = await _make_user_with_password(db_session, "stamps-pw-change@example.com", "old-password-123")
+    assert user.password_changed_at is None
+
+    await change_password(db_session, user, "old-password-123", "brand-new-password")
+
+    assert user.password_changed_at is not None
+
+
 async def test_save_avatar_writes_file_and_sets_avatar_url(db_session: AsyncSession):
     user = await _make_user(db_session, "avatar-me@example.com")
 

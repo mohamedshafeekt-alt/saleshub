@@ -37,10 +37,11 @@ class LeadAccessForbiddenError(Exception):
 
 
 def _is_duplicate_email_violation(exc: IntegrityError) -> bool:
-    # The unique index on Lead.email is the only unique constraint on this
-    # table; any other IntegrityError (e.g. a bad owner_id FK) is a
-    # different failure and must not be reported as a duplicate email.
-    return "ix_leads_email" in str(exc.orig)
+    # ix_leads_email guards the lead's own email; ix_lead_contacts_email
+    # guards its additional contacts (LeadContact rows added below). Any
+    # other IntegrityError (e.g. a bad owner_id FK) is a different failure
+    # and must not be reported as a duplicate email.
+    return "ix_leads_email" in str(exc.orig) or "ix_lead_contacts_email" in str(exc.orig)
 
 
 async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSender) -> Lead:
@@ -59,7 +60,13 @@ async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSen
     db.add(LeadContact(lead_id=lead.id, email=lead.email, phone=lead.phone))
     for contact in data.contacts:
         db.add(LeadContact(lead_id=lead.id, email=contact.email, phone=contact.phone))
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        if _is_duplicate_email_violation(exc):
+            raise DuplicateLeadEmailError(f"Email already exists: {data.email}") from exc
+        raise
 
     result = await db.execute(
         select(User)

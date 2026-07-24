@@ -66,3 +66,15 @@ async def revoke_refresh_token(db: AsyncSession, user: User, refresh_token: str)
     if stored is not None and stored.revoked_at is None:
         stored.revoked_at = _now_ist()
         await db.commit()
+
+
+async def revoke_all_refresh_tokens(db: AsyncSession, user: User) -> None:
+    """Revoke every one of the user's still-valid refresh tokens -- used on
+    password change, so every other logged-in session is forced to log in
+    again rather than silently keeping a stale-password session alive."""
+    result = await db.execute(
+        select(RefreshToken).where(RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None))
+    )
+    now = _now_ist()
+    for stored in result.scalars():
+        stored.revoked_at = now

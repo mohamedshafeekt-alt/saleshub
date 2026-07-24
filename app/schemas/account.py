@@ -1,10 +1,11 @@
 """Account request/response schemas."""
 
-from pydantic import BaseModel, ConfigDict, EmailStr, model_validator
+from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
 
 from app.models.enums import LeadTier
 from app.schemas.contact_account import AccountContactRead
 from app.schemas.deal import DealRead
+from app.schemas.validators import validate_linkedin_url
 
 
 class AccountContactInput(BaseModel):
@@ -45,6 +46,8 @@ class AccountCreate(BaseModel):
     linkedin_url: str | None = None
     contacts: list[AccountContactInput] = []
 
+    _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
+
     @model_validator(mode="after")
     def _first_contact_requires_name(self) -> "AccountCreate":
         if self.contacts and self.contacts[0].first_name is None:
@@ -65,6 +68,8 @@ class AccountUpdate(BaseModel):
     # them (use the dedicated PATCH /contacts/{id} for that). Same rule as
     # AccountCreate.contacts: only the first entry needs a first_name.
     contacts: list[AccountContactInput] = []
+
+    _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
 
     @model_validator(mode="after")
     def _first_contact_requires_name(self) -> "AccountUpdate":

@@ -777,7 +777,7 @@ async def test_create_account_contact_returns_201(
             "first_name": "Sarah",
             "last_name": "Jenkins",
             "job_title": "Chief Technology Officer",
-            "linkedin_url": "linkedin.com/in/sarahjenkins",
+            "linkedin_url": "https://linkedin.com/in/sarahjenkins",
             "email": "sarah.jenkins@nexbridge.io",
             "phone": "+91 98765 43210",
             "alternate_phone": "+1 555 000 0000",
@@ -790,7 +790,7 @@ async def test_create_account_contact_returns_201(
     body = response.json()
     assert body["first_name"] == "Sarah"
     assert body["job_title"] == "Chief Technology Officer"
-    assert body["linkedin_url"] == "linkedin.com/in/sarahjenkins"
+    assert body["linkedin_url"] == "https://linkedin.com/in/sarahjenkins"
     assert body["alternate_phone"] == "+1 555 000 0000"
     assert body["is_primary"] is True
     assert "id" in body

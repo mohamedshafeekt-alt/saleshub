@@ -54,7 +54,7 @@ _EXAMPLE_ROW = {
     "company": "IB",
     "domain": "ib.com",
     "job_title": "VP of Sales",
-    "linkedin_url": "linkedin.com/in/vishnuram",
+    "linkedin_url": "https://linkedin.com/in/vishnuram",
     "email": "vishnu.ram@ib.com",
     "phone": "1234567890",
     "source": "website",
