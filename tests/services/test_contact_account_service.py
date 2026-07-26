@@ -32,6 +32,7 @@ from app.services.contact_account_service import (
     list_account_contacts,
     update_account_contact,
 )
+from app.services.contact_service import DuplicateContactEmailError
 
 
 async def _make_user(
@@ -64,7 +65,13 @@ async def test_create_account_contact_creates_contact_and_link(db_session: Async
     owner = await _make_user(db_session, "owner-cac-create@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Create Contact Co")
 
-    data = AccountContactUpsert(first_name="Sarah", last_name="Jenkins", job_title="CTO", is_primary=True)
+    data = AccountContactUpsert(
+        first_name="Sarah",
+        last_name="Jenkins",
+        email="sarah-cac-create@example.com",
+        job_title="CTO",
+        is_primary=True,
+    )
     contact, contact_account = await create_account_contact(db_session, account.id, data, requester=owner)
 
     assert contact.id is not None
@@ -79,7 +86,10 @@ async def test_create_account_contact_raises_not_found_for_nonexistent_account(d
 
     with pytest.raises(AccountNotFoundError):
         await create_account_contact(
-            db_session, 999_999, AccountContactUpsert(first_name="Jane"), requester=requester
+            db_session,
+            999_999,
+            AccountContactUpsert(first_name="Jane", email="jane-cac-404@example.com"),
+            requester=requester,
         )
 
 
@@ -90,7 +100,10 @@ async def test_create_account_contact_raises_forbidden_for_non_owning_sales_rep(
 
     with pytest.raises(AccountAccessForbiddenError):
         await create_account_contact(
-            db_session, account.id, AccountContactUpsert(first_name="Jane"), requester=other_rep
+            db_session,
+            account.id,
+            AccountContactUpsert(first_name="Jane", email="jane-cac-forbidden@example.com"),
+            requester=other_rep,
         )
 
 
@@ -100,14 +113,19 @@ async def test_create_account_contact_raises_conflict_when_primary_already_exist
     owner = await _make_user(db_session, "owner-cac-conflict@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Primary Conflict Co")
     await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="First", is_primary=True), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="First", email="first-cac-conflict@example.com", is_primary=True),
+        requester=owner,
     )
 
     with pytest.raises(PrimaryContactAlreadyExistsError):
         await create_account_contact(
             db_session,
             account.id,
-            AccountContactUpsert(first_name="Second", is_primary=True),
+            AccountContactUpsert(
+                first_name="Second", email="second-cac-conflict@example.com", is_primary=True
+            ),
             requester=owner,
         )
 
@@ -116,15 +134,47 @@ async def test_create_account_contact_second_non_primary_contact_succeeds(db_ses
     owner = await _make_user(db_session, "owner-cac-second@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Second Contact Co")
     await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="First", is_primary=True), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="First", email="first-cac-second@example.com", is_primary=True),
+        requester=owner,
     )
 
     contact, contact_account = await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="Second"), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="Second", email="second-cac-second@example.com"),
+        requester=owner,
     )
 
     assert contact.first_name == "Second"
     assert contact_account.is_primary is False
+
+
+async def test_create_account_contact_raises_duplicate_email_for_existing_email_anywhere(
+    db_session: AsyncSession,
+):
+    """Email uniqueness is global across all contacts, not scoped to one
+    account -- a different name and a different (or the same) account still
+    counts as a duplicate."""
+    owner_a = await _make_user(db_session, "owner-cac-dup-a@example.com", UserRole.SALES_REP)
+    owner_b = await _make_user(db_session, "owner-cac-dup-b@example.com", UserRole.SALES_REP)
+    account_a = await _make_account(db_session, owner_a.id, company="Dup Email Co A")
+    account_b = await _make_account(db_session, owner_b.id, company="Dup Email Co B")
+    await create_account_contact(
+        db_session,
+        account_a.id,
+        AccountContactUpsert(first_name="Original", email="dup-cac@example.com"),
+        requester=owner_a,
+    )
+
+    with pytest.raises(DuplicateContactEmailError):
+        await create_account_contact(
+            db_session,
+            account_b.id,
+            AccountContactUpsert(first_name="Completely Different Name", email="dup-cac@example.com"),
+            requester=owner_b,
+        )
 
 
 # --- update_account_contact ----------------------------------------------------
@@ -134,14 +184,17 @@ async def test_update_account_contact_updates_contact_fields(db_session: AsyncSe
     owner = await _make_user(db_session, "owner-uac-fields@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Update Fields Co")
     contact, _ = await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="Old", job_title="Old Title"), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="Old", email="old-uac-fields@example.com", job_title="Old Title"),
+        requester=owner,
     )
 
     updated_contact, _ = await update_account_contact(
         db_session,
         account.id,
         contact.id,
-        AccountContactUpsert(first_name="New"),
+        AccountContactUpsert(contact_id=contact.id, first_name="New"),
         requester=owner,
     )
 
@@ -155,7 +208,11 @@ async def test_update_account_contact_raises_not_found_for_missing_contact(db_se
 
     with pytest.raises(ContactNotFoundError):
         await update_account_contact(
-            db_session, account.id, 999_999, AccountContactUpsert(first_name="New"), requester=owner
+            db_session,
+            account.id,
+            999_999,
+            AccountContactUpsert(contact_id=999_999, first_name="New"),
+            requester=owner,
         )
 
 
@@ -163,12 +220,19 @@ async def test_update_account_contact_raises_not_found_for_missing_account(db_se
     owner = await _make_user(db_session, "owner-uac-acc-404@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Real Account Co")
     contact, _ = await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="Real"), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="Real", email="real-uac-acc-404@example.com"),
+        requester=owner,
     )
 
     with pytest.raises(AccountNotFoundError):
         await update_account_contact(
-            db_session, 999_999, contact.id, AccountContactUpsert(first_name="New"), requester=owner
+            db_session,
+            999_999,
+            contact.id,
+            AccountContactUpsert(contact_id=contact.id, first_name="New"),
+            requester=owner,
         )
 
 
@@ -179,11 +243,14 @@ async def test_update_account_contact_creates_link_for_existing_contact_new_acco
     account_a = await _make_account(db_session, owner.id, company="Origin Co")
     account_b = await _make_account(db_session, owner.id, company="Destination Co")
     contact, _ = await create_account_contact(
-        db_session, account_a.id, AccountContactUpsert(first_name="Shared"), requester=owner
+        db_session,
+        account_a.id,
+        AccountContactUpsert(first_name="Shared", email="shared-uac-relink@example.com"),
+        requester=owner,
     )
 
     _, contact_account = await update_account_contact(
-        db_session, account_b.id, contact.id, AccountContactUpsert(), requester=owner
+        db_session, account_b.id, contact.id, AccountContactUpsert(contact_id=contact.id), requester=owner
     )
 
     assert contact_account.account_id == account_b.id
@@ -198,11 +265,18 @@ async def test_update_account_contact_sets_is_primary(db_session: AsyncSession):
     owner = await _make_user(db_session, "owner-uac-primary@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Set Primary Co")
     contact, _ = await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="ToPromote"), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="ToPromote", email="topromote-uac-primary@example.com"),
+        requester=owner,
     )
 
     _, contact_account = await update_account_contact(
-        db_session, account.id, contact.id, AccountContactUpsert(is_primary=True), requester=owner
+        db_session,
+        account.id,
+        contact.id,
+        AccountContactUpsert(contact_id=contact.id, is_primary=True),
+        requester=owner,
     )
 
     assert contact_account.is_primary is True
@@ -214,7 +288,12 @@ async def test_update_account_contact_resaving_current_primary_is_not_a_conflict
     owner = await _make_user(db_session, "owner-uac-resave@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Resave Primary Co")
     contact, _ = await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="AlreadyPrimary", is_primary=True), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(
+            first_name="AlreadyPrimary", email="alreadyprimary-uac-resave@example.com", is_primary=True
+        ),
+        requester=owner,
     )
 
     # Should not raise even though this account already has a primary contact
@@ -223,7 +302,7 @@ async def test_update_account_contact_resaving_current_primary_is_not_a_conflict
         db_session,
         account.id,
         contact.id,
-        AccountContactUpsert(job_title="Updated Title", is_primary=True),
+        AccountContactUpsert(contact_id=contact.id, job_title="Updated Title", is_primary=True),
         requester=owner,
     )
 
@@ -234,10 +313,16 @@ async def test_update_account_contact_raises_conflict_promoting_second_contact(d
     owner = await _make_user(db_session, "owner-uac-conflict@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="Promote Conflict Co")
     await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="Existing", is_primary=True), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="Existing", email="existing-uac-conflict@example.com", is_primary=True),
+        requester=owner,
     )
     second_contact, _ = await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="Second"), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="Second", email="second-uac-conflict@example.com"),
+        requester=owner,
     )
 
     with pytest.raises(PrimaryContactAlreadyExistsError):
@@ -245,7 +330,7 @@ async def test_update_account_contact_raises_conflict_promoting_second_contact(d
             db_session,
             account.id,
             second_contact.id,
-            AccountContactUpsert(is_primary=True),
+            AccountContactUpsert(contact_id=second_contact.id, is_primary=True),
             requester=owner,
         )
 
@@ -260,10 +345,16 @@ async def test_list_account_contacts_returns_only_that_accounts_contacts_with_is
     account_a = await _make_account(db_session, owner.id, company="List Co A")
     account_b = await _make_account(db_session, owner.id, company="List Co B")
     contact_a, _ = await create_account_contact(
-        db_session, account_a.id, AccountContactUpsert(first_name="A Contact", is_primary=True), requester=owner
+        db_session,
+        account_a.id,
+        AccountContactUpsert(first_name="A Contact", email="a-contact-lac-scope@example.com", is_primary=True),
+        requester=owner,
     )
     await create_account_contact(
-        db_session, account_b.id, AccountContactUpsert(first_name="B Contact"), requester=owner
+        db_session,
+        account_b.id,
+        AccountContactUpsert(first_name="B Contact", email="b-contact-lac-scope@example.com"),
+        requester=owner,
     )
 
     results, total = await list_account_contacts(db_session, account_a.id, requester=owner)
@@ -284,7 +375,10 @@ async def test_list_account_contacts_raises_forbidden_for_non_owning_sales_rep(d
     other_rep = await _make_user(db_session, "other-rep-lac-forbidden@example.com", UserRole.SALES_REP)
     account = await _make_account(db_session, owner.id, company="List Forbidden Co")
     await create_account_contact(
-        db_session, account.id, AccountContactUpsert(first_name="Someone"), requester=owner
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="Someone", email="someone-lac-forbidden@example.com"),
+        requester=owner,
     )
 
     with pytest.raises(AccountAccessForbiddenError):

@@ -1,6 +1,8 @@
 """Account CRUD + role-scoped list/search."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
+from datetime import date
+
+from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
@@ -8,12 +10,32 @@ from app.core.permission_codes import ACCOUNTS_ACCESS
 from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.contact import Contact
-from app.models.enums import LeadTier
+from app.models.enums import AccountActivityType, LeadTier
 from app.models.user import User
 from app.schemas.account import AccountCreate, AccountOverviewRead, AccountRead, AccountUpdate
+from app.schemas.account_activity import (
+    AccountActivityCreate,
+    AccountActivityDetailRead,
+    AccountActivityRead,
+    AccountActivityUpdate,
+)
+from app.schemas.account_document import AccountDocumentRead
 from app.schemas.contact_account import AccountContactRead, AccountContactUpsert
 from app.schemas.deal import DealRead
 from app.schemas.generic_response import Page
+from app.services.account_activity_service import (
+    AccountActivityNotFoundError,
+    create_account_activity,
+    delete_account_activity,
+    list_account_activities,
+    update_account_activity,
+)
+from app.services.account_document_service import (
+    AccountDocumentNotFoundError,
+    delete_account_document,
+    list_account_documents,
+    upload_account_document,
+)
 from app.services.account_service import (
     AccountAccessForbiddenError,
     AccountNotFoundError,
@@ -31,7 +53,9 @@ from app.services.contact_account_service import (
     list_account_contacts,
     update_account_contact,
 )
+from app.services.contact_service import DuplicateContactEmailError
 from app.services.deal_service import list_deals_for_account
+from app.services.file_upload_service import UnsupportedFileTypeError
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -56,7 +80,7 @@ async def create_account_route(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AccountRead:
-    account = await create_account(db, data)
+    account = await create_account(db, data, current_user)
     await db.commit()
     return AccountRead.model_validate(account)
 
@@ -229,6 +253,8 @@ async def upsert_account_contact_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except PrimaryContactAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DuplicateContactEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     await db.commit()
     return _to_account_contact_read(contact, contact_account.is_primary)
@@ -248,6 +274,152 @@ async def list_deals_for_account_route(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     return [DealRead.model_validate(deal) for deal in deals]
+
+
+@router.post(
+    "/{account_id}/activities", response_model=AccountActivityRead, status_code=status.HTTP_201_CREATED
+)
+async def create_account_activity_route(
+    account_id: int,
+    data: AccountActivityCreate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AccountActivityRead:
+    try:
+        activity = await create_account_activity(db, account_id, data, requester=current_user)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    await db.commit()
+    return AccountActivityRead.model_validate(activity)
+
+
+@router.get("/{account_id}/activities", response_model=list[AccountActivityDetailRead])
+async def list_account_activities_route(
+    account_id: int,
+    types: list[AccountActivityType] | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AccountActivityDetailRead]:
+    try:
+        activities = await list_account_activities(
+            db, account_id, current_user, types=types, date_from=date_from, date_to=date_to
+        )
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    return [AccountActivityDetailRead.model_validate(activity) for activity in activities]
+
+
+@router.patch("/{account_id}/activities/{activity_id}", response_model=AccountActivityDetailRead)
+async def update_account_activity_route(
+    account_id: int,
+    activity_id: int,
+    data: AccountActivityUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AccountActivityDetailRead:
+    try:
+        activity = await update_account_activity(db, account_id, activity_id, data, requester=current_user)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except AccountActivityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
+    return AccountActivityDetailRead.model_validate(activity)
+
+
+@router.delete("/{account_id}/activities/{activity_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account_activity_route(
+    account_id: int,
+    activity_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        await delete_account_activity(db, account_id, activity_id, requester=current_user)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except AccountActivityNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
+
+
+@router.post(
+    "/{account_id}/documents", response_model=AccountDocumentRead, status_code=status.HTTP_201_CREATED
+)
+async def upload_account_document_route(
+    account_id: int,
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> AccountDocumentRead:
+    content = await file.read()
+    try:
+        document = await upload_account_document(
+            db,
+            account_id,
+            content=content,
+            filename=file.filename or "document",
+            content_type=file.content_type or "",
+            requester=current_user,
+        )
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except UnsupportedFileTypeError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    await db.commit()
+    return AccountDocumentRead.model_validate(document)
+
+
+@router.get("/{account_id}/documents", response_model=list[AccountDocumentRead])
+async def list_account_documents_route(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[AccountDocumentRead]:
+    try:
+        documents = await list_account_documents(db, account_id, requester=current_user)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    return [AccountDocumentRead.model_validate(document) for document in documents]
+
+
+@router.delete("/{account_id}/documents/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_account_document_route(
+    account_id: int,
+    document_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        await delete_account_document(db, account_id, document_id, requester=current_user)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except AccountDocumentNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
 
 
 tag_router_permissions(router, ACCOUNTS_ACCESS)

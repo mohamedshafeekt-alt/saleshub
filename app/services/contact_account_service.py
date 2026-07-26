@@ -6,6 +6,7 @@ check -- this module depends on account_service, not the other way around.
 """
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
@@ -17,6 +18,7 @@ from app.services.account_service import (
     account_has_primary_contact,
     get_account,
 )
+from app.services.contact_service import DuplicateContactEmailError
 
 
 class ContactNotFoundError(Exception):
@@ -45,7 +47,13 @@ async def create_account_contact(
         alternate_phone=data.alternate_phone,
     )
     db.add(contact)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as exc:
+        await db.rollback()
+        if "ix_contacts_email" in str(exc.orig):
+            raise DuplicateContactEmailError(f"Email already exists: {data.email}") from exc
+        raise
 
     contact_account = ContactAccount(contact_id=contact.id, account_id=account_id, is_primary=is_primary)
     db.add(contact_account)

@@ -1,6 +1,8 @@
 """Import all ORM models here so Base.metadata is fully populated for Alembic autogenerate."""
 
 from app.models.account import Account
+from app.models.account_activity import AccountActivity
+from app.models.account_document import AccountDocument
 from app.models.company import Company
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
@@ -21,6 +23,8 @@ from app.models.user import User, UserStatus
 
 __all__ = [
     "Account",
+    "AccountActivity",
+    "AccountDocument",
     "Company",
     "Contact",
     "ContactAccount",

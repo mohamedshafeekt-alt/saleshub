@@ -2,9 +2,9 @@
 
 Covers: construction with all fields (including linkedin_url/alternate_phone)
 persists and round-trips; created_at/updated_at present via Base
-inheritance; first_name is NOT NULL (required); Contact has no account_id of
-its own -- association with an Account goes through ContactAccount (see
-tests/models/test_contact_account.py).
+inheritance; first_name and email are both NOT NULL (required); email is
+globally unique; Contact has no account_id of its own -- association with an
+Account goes through ContactAccount (see tests/models/test_contact_account.py).
 """
 
 import pytest
@@ -60,13 +60,12 @@ async def test_contact_persists_with_all_fields_and_inherits_timestamps(db_sessi
 
 
 async def test_contact_persists_with_only_required_fields(db_session: AsyncSession):
-    contact = Contact(first_name="Minimal")
+    contact = Contact(first_name="Minimal", email="minimal@example.com")
     db_session.add(contact)
     await db_session.flush()
     await db_session.refresh(contact)
 
     assert contact.last_name is None
-    assert contact.email is None
     assert contact.phone is None
     assert contact.alternate_phone is None
     assert contact.job_title is None
@@ -74,6 +73,21 @@ async def test_contact_persists_with_only_required_fields(db_session: AsyncSessi
 
 
 async def test_first_name_is_required(db_session: AsyncSession):
-    db_session.add(Contact(first_name=None))
+    db_session.add(Contact(first_name=None, email="first-name-required@example.com"))
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_email_is_required(db_session: AsyncSession):
+    db_session.add(Contact(first_name="No Email", email=None))
+    with pytest.raises(IntegrityError):
+        await db_session.flush()
+
+
+async def test_email_must_be_unique(db_session: AsyncSession):
+    db_session.add(Contact(first_name="A", email="dupe-contact@example.com"))
+    await db_session.flush()
+
+    db_session.add(Contact(first_name="B", email="dupe-contact@example.com"))
     with pytest.raises(IntegrityError):
         await db_session.flush()

@@ -12,11 +12,12 @@ from app.schemas.validators import validate_linkedin_url
 class AccountContactUpsert(BaseModel):
     """POST /accounts/{account_id}/contacts body: single route for create-or-
     update, same pattern as LeadUpsert -- absent `contact_id` creates a new
-    Contact (first_name becomes required) and links it to this account;
-    present `contact_id` updates that contact's fields (only those provided)
-    and/or the is_primary flag for this account's link to it. If no link
-    exists yet for this (account_id, contact_id) pair, one is created --
-    this is how an existing contact gets associated with another account.
+    Contact (first_name and email become required, since Contact.email is
+    NOT NULL and globally unique) and links it to this account; present
+    `contact_id` updates that contact's fields (only those provided) and/or
+    the is_primary flag for this account's link to it. If no link exists yet
+    for this (account_id, contact_id) pair, one is created -- this is how an
+    existing contact gets associated with another account.
     """
 
     contact_id: int | None = None
@@ -32,9 +33,12 @@ class AccountContactUpsert(BaseModel):
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
 
     @model_validator(mode="after")
-    def _first_name_required_when_creating(self) -> "AccountContactUpsert":
-        if self.contact_id is None and self.first_name is None:
-            raise ValueError("first_name is required when contact_id is not given")
+    def _first_name_and_email_required_when_creating(self) -> "AccountContactUpsert":
+        if self.contact_id is None:
+            if self.first_name is None:
+                raise ValueError("first_name is required when contact_id is not given")
+            if self.email is None:
+                raise ValueError("email is required when contact_id is not given")
         return self
 
 
@@ -48,7 +52,7 @@ class AccountContactRead(BaseModel):
     id: int
     first_name: str
     last_name: str | None
-    email: str | None
+    email: str
     phone: str | None
     alternate_phone: str | None
     job_title: str | None

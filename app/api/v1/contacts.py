@@ -3,23 +3,75 @@ no single owning account; see contact_service.py's module docstring). Use
 POST/PUT /accounts/{account_id}/contacts (app/api/v1/accounts.py) to create
 or update a contact together with its account link and is_primary flag."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permission_codes import CONTACTS_ACCESS
 from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
-from app.schemas.contact import ContactCreate, ContactRead, ContactUpdate
+from app.models.contact import Contact
+from app.models.contact_account import ContactAccount
+from app.models.enums import LeadTier
+from app.schemas.contact import (
+    ContactCreate,
+    ContactListItemRead,
+    ContactOverviewRead,
+    ContactRead,
+    ContactUpdate,
+)
+from app.schemas.deal import DealRead
+from app.schemas.generic_response import Page
 from app.services.contact_service import (
     ContactNotFoundError,
     DuplicateContactEmailError,
     create_contact,
     delete_contact,
     get_contact,
+    get_contact_overview,
+    list_contacts,
     update_contact,
 )
+from app.services.deal_service import list_deals_for_contact
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
+
+
+def _to_contact_list_item(contact: Contact, account_link: ContactAccount | None) -> ContactListItemRead:
+    account = account_link.account if account_link else None
+    return ContactListItemRead(
+        id=contact.id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        email=contact.email,
+        phone=contact.phone,
+        job_title=contact.job_title,
+        is_primary=account_link.is_primary if account_link else False,
+        account_id=account.id if account else None,
+        account_name=account.company if account else None,
+    )
+
+
+def _to_contact_overview(
+    contact: Contact, account_link: ContactAccount | None, deal_count: int
+) -> ContactOverviewRead:
+    account = account_link.account if account_link else None
+    return ContactOverviewRead(
+        id=contact.id,
+        first_name=contact.first_name,
+        last_name=contact.last_name,
+        email=contact.email,
+        phone=contact.phone,
+        alternate_phone=contact.alternate_phone,
+        job_title=contact.job_title,
+        linkedin_url=contact.linkedin_url,
+        is_primary=account_link.is_primary if account_link else False,
+        account_id=account.id if account else None,
+        account_name=account.company if account else None,
+        owner_id=account.owner_id if account else None,
+        owner_name=account.owner_name if account else None,
+        tier=account.tier if account else None,
+        deal_count=deal_count,
+    )
 
 
 @router.post("", response_model=ContactRead, status_code=status.HTTP_201_CREATED)
@@ -34,6 +86,61 @@ async def create_contact_route(
 
     await db.commit()
     return ContactRead.model_validate(contact)
+
+
+@router.get("", response_model=Page[ContactListItemRead])
+async def list_contacts_route(
+    owner_id: int | None = Query(None),
+    account_id: int | None = Query(None),
+    tier: LeadTier | None = Query(None),
+    is_primary: bool | None = Query(None),
+    search: str | None = Query(None),
+    limit: int = Query(20),
+    offset: int = Query(0),
+    db: AsyncSession = Depends(get_db),
+) -> Page[ContactListItemRead]:
+    items, total = await list_contacts(
+        db,
+        owner_id=owner_id,
+        account_id=account_id,
+        tier=tier,
+        is_primary=is_primary,
+        search=search,
+        limit=limit,
+        offset=offset,
+    )
+    return Page[ContactListItemRead](
+        items=[_to_contact_list_item(contact, link) for contact, link in items],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/{contact_id}/overview", response_model=ContactOverviewRead)
+async def get_contact_overview_route(
+    contact_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> ContactOverviewRead:
+    try:
+        contact, account_link, deal_count = await get_contact_overview(db, contact_id)
+    except ContactNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return _to_contact_overview(contact, account_link, deal_count)
+
+
+@router.get("/{contact_id}/deals", response_model=list[DealRead])
+async def list_contact_deals_route(
+    contact_id: int,
+    db: AsyncSession = Depends(get_db),
+) -> list[DealRead]:
+    try:
+        deals = await list_deals_for_contact(db, contact_id)
+    except ContactNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    return [DealRead.model_validate(deal) for deal in deals]
 
 
 @router.get("/{contact_id}", response_model=ContactRead)

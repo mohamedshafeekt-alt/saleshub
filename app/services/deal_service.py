@@ -20,7 +20,7 @@ from app.models.enums import LeadTier, NotificationType
 from app.models.user import User
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountNotFoundError, get_account
-from app.services.contact_service import ContactNotFoundError
+from app.services.contact_service import ContactNotFoundError, get_contact
 from app.services.notification_service import create_notification
 
 SortBy = Literal["value", "expected_close_date", "created_at"]
@@ -334,6 +334,18 @@ async def list_deals_for_account(db: AsyncSession, account_id: int, requester: U
     await get_account(db, account_id, requester)
 
     result = await db.execute(select(Deal).where(Deal.account_id == account_id))
+    return list(result.scalars().all())
+
+
+async def list_deals_for_contact(db: AsyncSession, contact_id: int) -> list[Deal]:
+    """Deals the Contact is a stakeholder on, via DealContact -- not
+    ownership-scoped (Contact itself is role-gated only, see
+    contact_service.py's module docstring)."""
+    await get_contact(db, contact_id)
+
+    result = await db.execute(
+        select(Deal).join(DealContact, DealContact.deal_id == Deal.id).where(DealContact.contact_id == contact_id)
+    )
     return list(result.scalars().all())
 
 

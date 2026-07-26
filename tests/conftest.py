@@ -217,7 +217,14 @@ async def make_contact(db_session: AsyncSession):
     plus the ContactAccount row linking it to account_id (is_primary=False
     unless overridden), so service/API tests can set up fixture data without
     going through the thing under test. Mirrors make_account's style.
+
+    email defaults to a random unique address (Contact.email is NOT NULL and
+    globally unique) rather than a fixed constant, so tests that create more
+    than one contact per case don't collide unless they explicitly pass the
+    same email on purpose (e.g. duplicate-email tests).
     """
+
+    import uuid
 
     from app.models.contact import Contact
     from app.models.contact_account import ContactAccount
@@ -235,7 +242,7 @@ async def make_contact(db_session: AsyncSession):
         contact = Contact(
             first_name=first_name,
             last_name=last_name,
-            email=email,
+            email=email or f"contact-{uuid.uuid4().hex[:12]}@example.com",
             phone=phone,
             job_title=job_title,
             **kwargs,

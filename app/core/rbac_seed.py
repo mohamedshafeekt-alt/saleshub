@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.permission_codes import (
     ACCOUNTS_ACCESS,
+    ACCOUNTS_DELETE_ANY_ACTIVITY,
     ACCOUNTS_VIEW_ALL,
     CONTACTS_ACCESS,
     DEALS_ACCESS,
@@ -47,6 +48,12 @@ _PERMISSIONS = [
     ),
     (ACCOUNTS_ACCESS, "Access Accounts", "View and manage accounts", "Accounts"),
     (ACCOUNTS_VIEW_ALL, "View All Accounts", "See all accounts, not just owned ones", "Accounts"),
+    (
+        ACCOUNTS_DELETE_ANY_ACTIVITY,
+        "Delete Any Account Activity",
+        "Delete a logged activity on any account, regardless of ownership",
+        "Accounts",
+    ),
     (DEALS_ACCESS, "Access Deals", "View and manage deals", "Deals"),
     (DEALS_VIEW_ALL, "View All Deals", "See all deals, not just owned ones", "Deals"),
     (

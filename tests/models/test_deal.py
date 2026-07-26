@@ -157,8 +157,8 @@ async def test_deal_can_reference_multiple_contacts(db_session: AsyncSession):
     owner = await _make_owner(db_session, email="owner7@example.com")
     account = await _make_account(db_session, owner.id, "7")
     stage = await _make_stage(db_session, "7")
-    contact_a = Contact(first_name="Cara", account_id=account.id)
-    contact_b = Contact(first_name="Dara", account_id=account.id)
+    contact_a = Contact(first_name="Cara", email="cara-deal-contacts@example.com")
+    contact_b = Contact(first_name="Dara", email="dara-deal-contacts@example.com")
     db_session.add_all([contact_a, contact_b])
     await db_session.flush()
 

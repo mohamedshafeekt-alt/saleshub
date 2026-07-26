@@ -50,6 +50,14 @@ class DealActivityType(str, enum.Enum):
     FOLLOW_UP = "follow_up"
 
 
+class AccountActivityType(str, enum.Enum):
+    NOTE = "note"
+    MEETING = "meeting"
+    CALL = "call"
+    COMMENT = "comment"
+    FOLLOW_UP = "follow_up"
+
+
 class NotificationType(str, enum.Enum):
     TASK_OVERDUE = "task_overdue"
     DEAL_STAGE_CHANGED = "deal_stage_changed"
