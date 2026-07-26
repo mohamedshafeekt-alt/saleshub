@@ -66,7 +66,7 @@ async def test_create_account_succeeds(db_session: AsyncSession):
     owner = await _make_user(db_session, "owner-acc@example.com", UserRole.SALES_REP)
 
     data = AccountCreate(company="Acme Corp", domain="acme.example.com", tier=LeadTier.GOLD, owner_id=owner.id)
-    account = await create_account(db_session, data)
+    account = await create_account(db_session, data, owner)
 
     assert account.id is not None
     assert account.company == "Acme Corp"
@@ -75,13 +75,22 @@ async def test_create_account_succeeds(db_session: AsyncSession):
     assert account.source_lead_id is None
 
 
+async def test_create_account_defaults_owner_id_to_requester_when_omitted(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-acc-default@example.com", UserRole.SALES_REP)
+
+    data = AccountCreate(company="Acme Corp", domain="acme.example.com", tier=LeadTier.GOLD)
+    account = await create_account(db_session, data, owner)
+
+    assert account.owner_id == owner.id
+
+
 async def test_create_account_with_no_contacts_creates_none(db_session: AsyncSession):
     owner = await _make_user(db_session, "owner-acc-no-contacts@example.com", UserRole.SALES_REP)
     data = AccountCreate(
         company="No Contact Co", domain="nocontact.example.com", tier=LeadTier.GOLD, owner_id=owner.id
     )
 
-    account = await create_account(db_session, data)
+    account = await create_account(db_session, data, owner)
 
     contacts = await _contacts_for_account(db_session, account.id)
     assert contacts == []
@@ -101,7 +110,7 @@ async def test_create_account_saves_first_contact_with_its_own_name(db_session: 
         ],
     )
 
-    account = await create_account(db_session, data)
+    account = await create_account(db_session, data, owner)
 
     contacts = await _contacts_for_account(db_session, account.id)
     assert len(contacts) == 1
@@ -126,7 +135,7 @@ async def test_create_account_nameless_extra_contacts_inherit_first_contacts_nam
         ],
     )
 
-    account = await create_account(db_session, data)
+    account = await create_account(db_session, data, owner)
 
     contacts = await _contacts_for_account(db_session, account.id)
     assert len(contacts) == 2
@@ -148,7 +157,7 @@ async def test_create_account_returns_owner_name_and_contact_count(db_session: A
         contacts=[AccountContactInput(first_name="Jane", email="jane@example.com")],
     )
 
-    account = await create_account(db_session, data)
+    account = await create_account(db_session, data, owner)
 
     assert account.owner_name == "Karthick"
     assert account.contact_count == 1

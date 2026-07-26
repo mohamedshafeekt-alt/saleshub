@@ -34,7 +34,7 @@ class AccountCreate(BaseModel):
     company: str
     domain: str
     tier: LeadTier
-    owner_id: int
+    owner_id: int | None = None
     industry: str | None = None
     city: str | None = None
     description: str | None = None

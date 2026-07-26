@@ -101,8 +101,10 @@ async def _add_contacts(db: AsyncSession, account_id: int, contacts: list[Accoun
         db.add(ContactAccount(contact_id=contact_row.id, account_id=account_id, is_primary=is_primary))
 
 
-async def create_account(db: AsyncSession, data: AccountCreate) -> Account:
-    account = Account(**data.model_dump(exclude={"contacts"}))
+async def create_account(db: AsyncSession, data: AccountCreate, requester: User) -> Account:
+    fields = data.model_dump(exclude={"contacts"})
+    fields["owner_id"] = fields["owner_id"] or requester.id
+    account = Account(**fields)
     db.add(account)
     await db.flush()
 
