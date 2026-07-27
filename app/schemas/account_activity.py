@@ -2,7 +2,8 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+from app.schemas.base import ORMBase
 
 from app.models.enums import AccountActivityType
 
@@ -19,8 +20,7 @@ class AccountActivityUpdate(BaseModel):
     note: str | None = Field(default=None, min_length=1)
 
 
-class AccountActivityRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class AccountActivityRead(ORMBase):
 
     id: int
     account_id: int

@@ -2,7 +2,8 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
+from pydantic import BaseModel, EmailStr, Field, field_validator
+from app.schemas.base import ORMBase
 
 from app.models.user import UserStatus
 from app.schemas.role import RoleRead
@@ -15,8 +16,7 @@ class UserCreate(BaseModel):
     role_id: int
 
 
-class UserRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class UserRead(ORMBase):
 
     id: int
     email: EmailStr

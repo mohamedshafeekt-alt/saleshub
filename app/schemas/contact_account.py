@@ -4,7 +4,8 @@ ContactAccount link (with is_primary) for one specific account in a single
 call.
 """
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from app.schemas.base import ORMBase
 
 from app.schemas.validators import validate_linkedin_url
 
@@ -42,12 +43,11 @@ class AccountContactUpsert(BaseModel):
         return self
 
 
-class AccountContactRead(BaseModel):
+class AccountContactRead(ORMBase):
     """A contact as seen from one specific account's Contacts tab -- same
     fields as ContactRead, plus is_primary for *this* account (a Contact
     linked to multiple accounts can be primary for one and not another)."""
 
-    model_config = ConfigDict(from_attributes=True)
 
     id: int
     first_name: str

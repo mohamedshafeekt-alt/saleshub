@@ -2,7 +2,8 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+from app.schemas.base import ORMBase
 
 from app.models.enums import DealActivityType
 
@@ -21,8 +22,7 @@ class DealActivityUpdate(BaseModel):
     note: str | None = Field(default=None, min_length=1)
 
 
-class DealActivityRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class DealActivityRead(ORMBase):
 
     id: int
     deal_id: int

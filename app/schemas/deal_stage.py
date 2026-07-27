@@ -1,6 +1,7 @@
 """DealStage request/response schemas."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
+from app.schemas.base import ORMBase
 
 
 class DealStageCreate(BaseModel):
@@ -16,8 +17,7 @@ class DealStageUpdate(BaseModel):
     is_cold: bool | None = None
 
 
-class DealStageRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class DealStageRead(ORMBase):
 
     id: int
     company_id: int

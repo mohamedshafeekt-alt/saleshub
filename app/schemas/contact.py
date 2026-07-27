@@ -4,7 +4,8 @@ Contact is a standalone person record -- it's linked to Account(s) via
 ContactAccount (app/schemas/contact_account.py), not by a field here.
 """
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator
+from pydantic import BaseModel, EmailStr, field_validator
+from app.schemas.base import ORMBase
 
 from app.schemas.validators import validate_linkedin_url
 
@@ -35,8 +36,7 @@ class ContactUpdate(BaseModel):
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
 
 
-class ContactRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class ContactRead(ORMBase):
 
     id: int
     first_name: str

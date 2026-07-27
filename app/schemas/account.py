@@ -1,6 +1,7 @@
 """Account request/response schemas."""
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from app.schemas.base import ORMBase
 
 from app.models.enums import LeadTier
 from app.schemas.contact_account import AccountContactRead
@@ -73,8 +74,7 @@ class AccountUpdate(BaseModel):
         return self
 
 
-class AccountRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class AccountRead(ORMBase):
 
     id: int
     company: str

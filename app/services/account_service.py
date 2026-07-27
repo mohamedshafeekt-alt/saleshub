@@ -259,6 +259,7 @@ async def convert_lead_to_account(
         tier=resolved_tier,
         owner_id=resolved_owner_id,
         source_lead_id=lead.id,
+        linkedin_url=lead.linkedin_url,
     )
     db.add(account)
     lead.is_converted = True
