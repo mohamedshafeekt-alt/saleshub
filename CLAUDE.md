@@ -53,9 +53,14 @@ and Delivery must sign off on that item.
 Explicitly OUT of scope for Phase 1 (do not build these even if the
 original scope PDF mentions them):
 - A full Document Management / Proposals repository (folders, versioning,
-  cross-entity document search). Per-deal document upload (proposals,
-  NDAs, contracts attached directly to a Deal) is in scope and built —
-  see `app/services/deal_document_service.py`.
+  upload/delete UI beyond the per-entity endpoints). Per-deal document
+  upload (proposals, NDAs, contracts attached directly to a Deal) is in
+  scope and built — see `app/services/deal_document_service.py`.
+  Scope change (2026-07-28, requested directly): a read-only combined
+  list across Account and Deal documents (`GET /api/v1/documents`) was
+  pulled forward out of Milestone 3 for the sidebar "Documents" page —
+  see `app/services/document_service.py`. Upload/delete still only exist
+  on the per-account/per-deal endpoints.
 - Staff Augmentation (both resource list and opportunity tracking)
 - Dynamic / templated / stage-gated checklist logic — Phase 1 checklist
   is a flat, static list of items with a status toggle and notes field
