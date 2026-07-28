@@ -2,11 +2,10 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from app.schemas.base import ORMBase
 
 
-class AccountDocumentRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class AccountDocumentRead(ORMBase):
 
     id: int
     account_id: int

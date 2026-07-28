@@ -2,7 +2,8 @@
 
 from datetime import date, datetime
 
-from pydantic import BaseModel, ConfigDict, EmailStr, field_validator, model_validator
+from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from app.schemas.base import ORMBase
 
 from app.models.enums import LeadSource, LeadStatus, LeadTier
 from app.schemas.lead_activity import LeadActivityDetailRead
@@ -22,8 +23,7 @@ class LeadContactInput(BaseModel):
         return self
 
 
-class LeadContactRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class LeadContactRead(ORMBase):
 
     id: int
     email: str | None
@@ -72,8 +72,7 @@ class LeadUpsert(BaseModel):
         return self
 
 
-class LeadRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class LeadRead(ORMBase):
 
     id: int
     first_name: str

@@ -2,7 +2,8 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, Field
+from app.schemas.base import ORMBase
 
 from app.models.enums import LeadActivityType
 
@@ -19,8 +20,7 @@ class LeadActivityUpdate(BaseModel):
     note: str | None = Field(default=None, min_length=1)
 
 
-class LeadActivityRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class LeadActivityRead(ORMBase):
 
     id: int
     lead_id: int

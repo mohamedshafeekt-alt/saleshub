@@ -1,10 +1,9 @@
 """Permission catalog schemas."""
 
-from pydantic import BaseModel, ConfigDict
+from app.schemas.base import ORMBase
 
 
-class PermissionRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class PermissionRead(ORMBase):
 
     id: int
     code: str

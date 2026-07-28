@@ -1,6 +1,7 @@
 """Role request/response schemas."""
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
+from app.schemas.base import ORMBase
 
 from app.schemas.permission import PermissionRead
 
@@ -17,8 +18,7 @@ class RoleUpdate(BaseModel):
     permission_ids: list[int] = []
 
 
-class RoleRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class RoleRead(ORMBase):
 
     id: int
     name: str

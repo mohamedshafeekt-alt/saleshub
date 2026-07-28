@@ -2,11 +2,10 @@
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from app.schemas.base import ORMBase
 
 
-class DealDocumentRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class DealDocumentRead(ORMBase):
 
     id: int
     deal_id: int

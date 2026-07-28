@@ -292,6 +292,18 @@ async def test_list_leads_delivery_sme_sees_own_and_unassigned_leads(db_session:
     assert unassigned.id in ids
 
 
+async def test_list_leads_excludes_converted_leads(db_session: AsyncSession, make_lead):
+    rep = await _make_user(db_session, "rep-converted-svc@example.com", UserRole.SALES_REP)
+    converted = await make_lead(owner_id=rep.id, email="converted-svc@example.com", is_converted=True)
+    open_lead = await make_lead(owner_id=rep.id, email="open-svc@example.com")
+
+    results, _total = await list_leads(db_session, requester=rep)
+
+    ids = {lead.id for lead in results}
+    assert converted.id not in ids
+    assert open_lead.id in ids
+
+
 async def test_list_leads_manager_sees_all_when_no_owner_id_given(db_session: AsyncSession, make_lead):
     rep_a = await _make_user(db_session, "rep-c@example.com", UserRole.SALES_REP)
     rep_b = await _make_user(db_session, "rep-d@example.com", UserRole.SALES_REP)

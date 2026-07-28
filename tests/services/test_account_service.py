@@ -506,6 +506,7 @@ async def test_convert_lead_to_account_copies_fields_and_sets_source_lead_id(
         email="convert-me@example.com",
         company="Convert Co",
         domain="convert.example.com",
+        linkedin_url="https://linkedin.com/company/convert-co",
     )
 
     account = await convert_lead_to_account(
@@ -517,6 +518,7 @@ async def test_convert_lead_to_account_copies_fields_and_sets_source_lead_id(
     assert account.tier == LeadTier.GOLD
     assert account.owner_id == owner.id
     assert account.source_lead_id == lead.id
+    assert account.linkedin_url == "https://linkedin.com/company/convert-co"
 
 
 async def test_convert_lead_to_account_marks_lead_as_converted(db_session: AsyncSession, make_lead):

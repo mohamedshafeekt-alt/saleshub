@@ -3,7 +3,8 @@
 from datetime import date, datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
+from app.schemas.base import ORMBase
 
 from app.models.enums import LeadTier
 
@@ -39,8 +40,7 @@ class DealUpdate(BaseModel):
     note: str | None = None
 
 
-class DealRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class DealRead(ORMBase):
 
     id: int
     deal_name: str
@@ -55,8 +55,7 @@ class DealRead(BaseModel):
     owner_id: int
 
 
-class DealStageHistoryRead(BaseModel):
-    model_config = ConfigDict(from_attributes=True)
+class DealStageHistoryRead(ORMBase):
 
     id: int
     deal_id: int

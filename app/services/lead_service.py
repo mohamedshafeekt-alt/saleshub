@@ -3,7 +3,7 @@ listing/search, and ownership-checked get/update/delete."""
 
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -115,7 +115,7 @@ async def list_leads(
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[Lead], int]:
-    filters = []
+    filters: list[ColumnElement[bool]] = [Lead.is_converted.is_(False)]
     if LEADS_VIEW_ALL not in requester.permission_codes:
         filters.append(or_(Lead.owner_id == requester.id, Lead.owner_id.is_(None)))
     if owner_id is not None:
