@@ -79,3 +79,13 @@ class ActivityFeedEntry(BaseModel):
 
 class ActivityFeedResponse(BaseModel):
     entries: list[ActivityFeedEntry]
+
+
+class DashboardOverviewResponse(BaseModel):
+    summary: DashboardSummary
+    funnel: FunnelResponse
+    deal_distribution: DealDistributionResponse
+    leaderboard: LeaderboardResponse
+    drop_off_reasons: DropOffReasonsResponse
+    conversion_trend: ConversionTrendResponse
+    activity_feed: ActivityFeedResponse

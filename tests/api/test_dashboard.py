@@ -1,16 +1,17 @@
-"""HTTP-level contract for /api/v1/dashboard/*.
+"""HTTP-level contract for GET /api/v1/dashboard.
 
 Covers: summary tiles (leads generated/qualified, deals in pipeline/closed),
 401 with no auth, funnel ordered by stage sort_order, deal distribution
 grouped by tier, leaderboard ranked by won-deal revenue, drop-off reasons
 grouped by cold_reason across cold and closed-lost stages, conversion trend
-counting stage-history transitions, and the merged/paginated activity feed.
+counting stage-history transitions, and the merged/paginated activity feed —
+all returned together from the single combined endpoint.
 """
 
 from httpx import AsyncClient
 
 
-async def test_summary_counts_leads_and_deals_in_current_month(
+async def test_dashboard_counts_leads_and_deals_in_current_month(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_lead
 ):
     from app.models.enums import LeadStatus
@@ -27,22 +28,22 @@ async def test_summary_counts_leads_and_deals_in_current_month(
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=1000)
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=won_stage.id, value=2000)
 
-    response = await client.get("/api/v1/dashboard/summary", headers=headers)
+    response = await client.get("/api/v1/dashboard", headers=headers)
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["leads_generated"]["value"] == 2
-    assert body["qualified_leads"]["value"] == 1
-    assert body["deals_in_pipeline"]["value"] == 1
-    assert body["deals_closed"]["value"] == 1
+    summary = response.json()["summary"]
+    assert summary["leads_generated"]["value"] == 2
+    assert summary["qualified_leads"]["value"] == 1
+    assert summary["deals_in_pipeline"]["value"] == 1
+    assert summary["deals_closed"]["value"] == 1
 
 
-async def test_summary_requires_authentication(client: AsyncClient):
-    response = await client.get("/api/v1/dashboard/summary")
+async def test_dashboard_requires_authentication(client: AsyncClient):
+    response = await client.get("/api/v1/dashboard")
     assert response.status_code == 401
 
 
-async def test_funnel_orders_stages_by_sort_order(
+async def test_dashboard_funnel_orders_stages_by_sort_order(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
 ):
     user = await make_user(email="funnel@example.com")
@@ -54,17 +55,19 @@ async def test_funnel_orders_stages_by_sort_order(
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_a.id)
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_b.id)
 
-    response = await client.get("/api/v1/dashboard/funnel", headers=headers)
+    response = await client.get("/api/v1/dashboard", headers=headers)
 
     assert response.status_code == 200
-    stages = [s for s in response.json()["stages"] if s["stage_name"] in {"Received Requirements", "Qualified to Buy"}]
+    stages = [
+        s for s in response.json()["funnel"]["stages"] if s["stage_name"] in {"Received Requirements", "Qualified to Buy"}
+    ]
     assert stages == [
         {"stage_name": "Received Requirements", "count": 2},
         {"stage_name": "Qualified to Buy", "count": 1},
     ]
 
 
-async def test_deal_distribution_groups_by_tier(
+async def test_dashboard_deal_distribution_groups_by_tier(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
 ):
     from app.models.enums import LeadTier
@@ -77,15 +80,15 @@ async def test_deal_distribution_groups_by_tier(
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.GOLD, value=500)
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.SILVER, value=200)
 
-    response = await client.get("/api/v1/dashboard/deal-distribution", headers=headers)
+    response = await client.get("/api/v1/dashboard", headers=headers)
 
     assert response.status_code == 200
-    entries = {e["tier"]: e for e in response.json()["entries"]}
+    entries = {e["tier"]: e for e in response.json()["deal_distribution"]["entries"]}
     assert entries["gold"] == {"tier": "gold", "count": 2, "total_value": 1500.0}
     assert entries["silver"] == {"tier": "silver", "count": 1, "total_value": 200.0}
 
 
-async def test_leaderboard_ranks_owners_by_won_revenue(
+async def test_dashboard_leaderboard_ranks_owners_by_won_revenue(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
 ):
     rep_1 = await make_user(email="rep1@example.com", first_name="Sarah")
@@ -98,17 +101,17 @@ async def test_leaderboard_ranks_owners_by_won_revenue(
     await make_deal(account_id=account.id, owner_id=rep_2.id, stage_id=won_stage.id, value=1000)
     await make_deal(account_id=account.id, owner_id=rep_2.id, stage_id=open_stage.id, value=9999)
 
-    response = await client.get("/api/v1/dashboard/leaderboard", headers=headers)
+    response = await client.get("/api/v1/dashboard", headers=headers)
 
     assert response.status_code == 200
-    entries = response.json()["entries"]
+    entries = response.json()["leaderboard"]["entries"]
     by_owner = {e["owner_id"]: e for e in entries}
     assert by_owner[rep_2.id] == {"owner_id": rep_2.id, "owner_name": "Mike", "revenue": 1000.0, "deals_closed": 1}
     assert by_owner[rep_1.id] == {"owner_id": rep_1.id, "owner_name": "Sarah", "revenue": 500.0, "deals_closed": 1}
     assert entries.index(by_owner[rep_2.id]) < entries.index(by_owner[rep_1.id])
 
 
-async def test_drop_off_reasons_groups_cold_and_lost_deals_by_reason_and_stage_lost(
+async def test_dashboard_drop_off_reasons_groups_cold_and_lost_deals_by_reason_and_stage_lost(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, db_session
 ):
     from app.models.deal_stage_history import DealStageHistory
@@ -135,10 +138,10 @@ async def test_drop_off_reasons_groups_cold_and_lost_deals_by_reason_and_stage_l
     await db_session.flush()
     await db_session.commit()
 
-    response = await client.get("/api/v1/dashboard/drop-off-reasons", headers=headers)
+    response = await client.get("/api/v1/dashboard", headers=headers)
 
     assert response.status_code == 200
-    entries = {(e["reason"], e["stage_lost"]): e for e in response.json()["entries"]}
+    entries = {(e["reason"], e["stage_lost"]): e for e in response.json()["drop_off_reasons"]["entries"]}
     assert entries[("Pricing too high", "Unknown")]["count"] == 1
     assert entries[("Pricing too high", "Unknown")]["lost_value"] == 1000.0
     assert entries[("Pricing too high", "Proposals")]["count"] == 1
@@ -147,7 +150,7 @@ async def test_drop_off_reasons_groups_cold_and_lost_deals_by_reason_and_stage_l
     assert entries[("Competitor chosen", "Unknown")]["lost_value"] == 300.0
 
 
-async def test_conversion_trend_counts_stage_transitions_by_month(
+async def test_dashboard_conversion_trend_counts_stage_transitions_by_month(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, db_session
 ):
     from app.models.deal_stage_history import DealStageHistory
@@ -163,14 +166,14 @@ async def test_conversion_trend_counts_stage_transitions_by_month(
     await db_session.flush()
     await db_session.commit()
 
-    response = await client.get("/api/v1/dashboard/conversion-trend?granularity=monthly", headers=headers)
+    response = await client.get("/api/v1/dashboard?granularity=monthly", headers=headers)
 
     assert response.status_code == 200
-    entries = response.json()["entries"]
+    entries = response.json()["conversion_trend"]["entries"]
     assert any(e["stage_name"] == "Closed Won" and e["count"] == 1 for e in entries)
 
 
-async def test_activity_feed_merges_and_sorts_across_entities(
+async def test_dashboard_activity_feed_merges_and_sorts_across_entities(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_lead, db_session
 ):
     from app.models.account_activity import AccountActivity
@@ -195,9 +198,9 @@ async def test_activity_feed_merges_and_sorts_across_entities(
     await db_session.flush()
     await db_session.commit()
 
-    response = await client.get("/api/v1/dashboard/activity-feed?limit=2", headers=headers)
+    response = await client.get("/api/v1/dashboard?limit=2", headers=headers)
 
     assert response.status_code == 200
-    body = response.json()["entries"]
+    body = response.json()["activity_feed"]["entries"]
     assert len(body) == 2
     assert {e["entity_type"] for e in body} <= {"deal", "lead", "account"}
