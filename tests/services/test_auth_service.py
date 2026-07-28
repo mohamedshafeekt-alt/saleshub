@@ -157,3 +157,32 @@ async def test_issue_tokens_sets_last_login_at(db_session: AsyncSession, make_us
     await issue_tokens(db_session, user)
 
     assert user.last_login_at is not None
+
+
+async def test_issue_tokens_writes_audit_log(db_session: AsyncSession, make_user):
+    from app.models.audit_log import AuditLog
+
+    user = await make_user(email="auth-audit-login@example.com")
+    await issue_tokens(db_session, user)
+
+    result = await db_session.execute(
+        select(AuditLog).where(
+            AuditLog.table_name == "users", AuditLog.record_id == user.id, AuditLog.action == "login"
+        )
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_revoke_refresh_token_writes_audit_log(db_session: AsyncSession, make_user):
+    from app.models.audit_log import AuditLog
+
+    user = await make_user(email="auth-audit-logout@example.com")
+    _, refresh_token = await issue_tokens(db_session, user)
+    await revoke_refresh_token(db_session, user, refresh_token)
+
+    result = await db_session.execute(
+        select(AuditLog).where(
+            AuditLog.table_name == "users", AuditLog.record_id == user.id, AuditLog.action == "logout"
+        )
+    )
+    assert result.scalar_one() is not None

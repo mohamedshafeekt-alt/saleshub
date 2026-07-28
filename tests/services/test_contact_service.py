@@ -39,9 +39,10 @@ from tests.support.roles import UserRole, role_id_for
 
 
 async def test_create_contact_succeeds(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-create-succeeds@example.com", UserRole.SALES_REP)
     data = ContactCreate(first_name="Jane", last_name="Doe", email="jane@example.com")
 
-    contact = await create_contact(db_session, data)
+    contact = await create_contact(db_session, data, requester=actor)
 
     assert contact.id is not None
     assert contact.first_name == "Jane"
@@ -50,6 +51,7 @@ async def test_create_contact_succeeds(db_session: AsyncSession):
 
 
 async def test_create_contact_with_linkedin_and_alternate_phone(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-create-linkedin@example.com", UserRole.SALES_REP)
     data = ContactCreate(
         first_name="Jane",
         email="jane-linkedin@example.com",
@@ -58,7 +60,7 @@ async def test_create_contact_with_linkedin_and_alternate_phone(db_session: Asyn
         alternate_phone="555-0002",
     )
 
-    contact = await create_contact(db_session, data)
+    contact = await create_contact(db_session, data, requester=actor)
 
     assert contact.linkedin_url == "https://linkedin.com/in/jane"
     assert contact.phone == "555-0001"
@@ -66,11 +68,12 @@ async def test_create_contact_with_linkedin_and_alternate_phone(db_session: Asyn
 
 
 async def test_create_contact_raises_duplicate_email_for_existing_email(db_session: AsyncSession):
-    await create_contact(db_session, ContactCreate(first_name="Jane", email="dup-contact@example.com"))
+    actor = await _make_user(db_session, "actor-create-dup1@example.com", UserRole.SALES_REP)
+    await create_contact(db_session, ContactCreate(first_name="Jane", email="dup-contact@example.com"), requester=actor)
 
     with pytest.raises(DuplicateContactEmailError):
         await create_contact(
-            db_session, ContactCreate(first_name="Someone Else", email="dup-contact@example.com")
+            db_session, ContactCreate(first_name="Someone Else", email="dup-contact@example.com"), requester=actor
         )
 
 
@@ -80,7 +83,10 @@ async def test_get_contact_raises_not_found_for_missing_id(db_session: AsyncSess
 
 
 async def test_get_contact_succeeds(db_session: AsyncSession):
-    created = await create_contact(db_session, ContactCreate(first_name="Getable", email="getable@example.com"))
+    actor = await _make_user(db_session, "actor-get-succeeds@example.com", UserRole.SALES_REP)
+    created = await create_contact(
+        db_session, ContactCreate(first_name="Getable", email="getable@example.com"), requester=actor
+    )
 
     fetched = await get_contact(db_session, contact_id=created.id)
 
@@ -88,17 +94,22 @@ async def test_get_contact_succeeds(db_session: AsyncSession):
 
 
 async def test_update_contact_raises_not_found_for_missing_id(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-update-missing@example.com", UserRole.SALES_REP)
     with pytest.raises(ContactNotFoundError):
-        await update_contact(db_session, contact_id=999_999, data=ContactUpdate(first_name="New"))
+        await update_contact(db_session, contact_id=999_999, data=ContactUpdate(first_name="New"), requester=actor)
 
 
 async def test_update_contact_applies_partial_changes(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-update-partial@example.com", UserRole.SALES_REP)
     created = await create_contact(
         db_session,
         ContactCreate(first_name="Old", last_name="Name", email="old-name@example.com", job_title="Old Title"),
+        requester=actor,
     )
 
-    updated = await update_contact(db_session, contact_id=created.id, data=ContactUpdate(first_name="New"))
+    updated = await update_contact(
+        db_session, contact_id=created.id, data=ContactUpdate(first_name="New"), requester=actor
+    )
 
     assert updated.first_name == "New"
     assert updated.last_name == "Name"  # untouched field preserved
@@ -106,30 +117,42 @@ async def test_update_contact_applies_partial_changes(db_session: AsyncSession):
 
 
 async def test_create_contact_duplicate_email_raises(db_session: AsyncSession):
-    await create_contact(db_session, ContactCreate(first_name="First", email="dup-contact@example.com"))
+    actor = await _make_user(db_session, "actor-create-dup2@example.com", UserRole.SALES_REP)
+    await create_contact(db_session, ContactCreate(first_name="First", email="dup-contact@example.com"), requester=actor)
 
     with pytest.raises(DuplicateContactEmailError):
-        await create_contact(db_session, ContactCreate(first_name="Second", email="dup-contact@example.com"))
+        await create_contact(
+            db_session, ContactCreate(first_name="Second", email="dup-contact@example.com"), requester=actor
+        )
 
 
 async def test_update_contact_duplicate_email_raises(db_session: AsyncSession):
-    await create_contact(db_session, ContactCreate(first_name="First", email="taken@example.com"))
-    other = await create_contact(db_session, ContactCreate(first_name="Second", email="free@example.com"))
+    actor = await _make_user(db_session, "actor-update-dup@example.com", UserRole.SALES_REP)
+    await create_contact(db_session, ContactCreate(first_name="First", email="taken@example.com"), requester=actor)
+    other = await create_contact(
+        db_session, ContactCreate(first_name="Second", email="free@example.com"), requester=actor
+    )
 
     with pytest.raises(DuplicateContactEmailError):
-        await update_contact(db_session, contact_id=other.id, data=ContactUpdate(email="taken@example.com"))
+        await update_contact(
+            db_session, contact_id=other.id, data=ContactUpdate(email="taken@example.com"), requester=actor
+        )
 
 
 async def test_delete_contact_raises_not_found_for_missing_id(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-delete-missing@example.com", UserRole.SALES_REP)
     with pytest.raises(ContactNotFoundError):
-        await delete_contact(db_session, contact_id=999_999)
+        await delete_contact(db_session, contact_id=999_999, requester=actor)
 
 
 async def test_delete_contact_removes_the_row(db_session: AsyncSession):
-    created = await create_contact(db_session, ContactCreate(first_name="To Delete", email="to-delete@example.com"))
+    actor = await _make_user(db_session, "actor-delete-row@example.com", UserRole.SALES_REP)
+    created = await create_contact(
+        db_session, ContactCreate(first_name="To Delete", email="to-delete@example.com"), requester=actor
+    )
     contact_id = created.id
 
-    await delete_contact(db_session, contact_id=contact_id)
+    await delete_contact(db_session, contact_id=contact_id, requester=actor)
 
     with pytest.raises(ContactNotFoundError):
         await get_contact(db_session, contact_id=contact_id)
@@ -154,7 +177,10 @@ async def test_get_contact_overview_raises_not_found_for_missing_id(db_session: 
 async def test_get_contact_overview_with_no_linked_accounts_returns_null_derived_fields(
     db_session: AsyncSession,
 ):
-    created = await create_contact(db_session, ContactCreate(first_name="Unlinked", email="unlinked@example.com"))
+    actor = await _make_user(db_session, "actor-overview-unlinked@example.com", UserRole.SALES_REP)
+    created = await create_contact(
+        db_session, ContactCreate(first_name="Unlinked", email="unlinked@example.com"), requester=actor
+    )
 
     contact, account_link, deal_count = await get_contact_overview(db_session, created.id)
 
@@ -323,7 +349,9 @@ async def test_list_contacts_no_filters_returns_all_contacts_including_unlinked(
     account = await make_account(owner_id=owner.id, company="Unfiltered Co")
     linked = await make_contact(account_id=account.id, first_name="Linked")
     unlinked = await create_contact(
-        db_session, ContactCreate(first_name="Unlinked Contact", email="unlinked-contact@example.com")
+        db_session,
+        ContactCreate(first_name="Unlinked Contact", email="unlinked-contact@example.com"),
+        requester=owner,
     )
 
     items, _total = await list_contacts(db_session)
@@ -350,3 +378,54 @@ async def test_list_contacts_owner_filter_matches_any_of_multiple_linked_account
 
     assert total == 1
     assert [c.id for c, _link in items] == [contact.id]
+
+
+# --- audit log ------------------------------------------------------------
+
+
+async def test_create_contact_writes_audit_log(db_session, make_user):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    actor = await make_user(email="contact-audit-actor@example.com")
+    data = ContactCreate(first_name="John", last_name="Doe", email="contact-audit-1@example.com")
+    contact = await create_contact(db_session, data, requester=actor)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "contacts", AuditLog.record_id == contact.id, AuditLog.action == "created")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_update_contact_writes_audit_log(db_session, make_user, make_account, make_contact):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    actor = await make_user(email="contact-audit-actor2@example.com")
+    account = await make_account(owner_id=actor.id)
+    contact = await make_contact(account_id=account.id)
+    await update_contact(db_session, contact.id, ContactUpdate(first_name="Jane"), requester=actor)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "contacts", AuditLog.record_id == contact.id, AuditLog.action == "updated")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_delete_contact_writes_audit_log(db_session, make_user, make_account, make_contact):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    actor = await make_user(email="contact-audit-actor3@example.com")
+    account = await make_account(owner_id=actor.id)
+    contact = await make_contact(account_id=account.id)
+    contact_id = contact.id
+    await delete_contact(db_session, contact_id, requester=actor)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "contacts", AuditLog.record_id == contact_id, AuditLog.action == "deleted")
+    )
+    assert result.scalar_one() is not None

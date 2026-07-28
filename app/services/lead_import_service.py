@@ -180,7 +180,7 @@ async def import_leads(
             continue
 
         try:
-            await create_lead(db, data, email_sender)
+            await create_lead(db, data, email_sender, requester=requester)
         except (DuplicateLeadEmailError, IntegrityError) as exc:
             errors.append(LeadImportRowError(row=index, error=str(exc)))
             continue

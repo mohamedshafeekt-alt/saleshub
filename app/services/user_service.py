@@ -10,10 +10,12 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
+from app.models.enums import AuditAction
 from app.models.role import Role
 from app.models.user import User, UserStatus
 from app.schemas.user import UserCreate, UserUpdate
 from app.core.logging import logger
+from app.services.audit_service import log_audit
 from app.services.email.sender import EmailSender
 from app.services.email.templates import send_new_user_credentials_email
 from app.services.file_upload_service import FileUploadService, UnsupportedFileTypeError
@@ -36,7 +38,7 @@ def _generate_password() -> str:
     return "".join(secrets.choice(alphabet) for _ in range(12))
 
 
-async def create_user(db: AsyncSession, data: UserCreate, email_sender: EmailSender) -> User:
+async def create_user(db: AsyncSession, data: UserCreate, email_sender: EmailSender, actor_id: int) -> User:
     role = await db.get(Role, data.role_id)
     if role is None or role.is_delete:
         raise RoleNotFoundError(f"Role not found: {data.role_id}")
@@ -72,6 +74,11 @@ async def create_user(db: AsyncSession, data: UserCreate, email_sender: EmailSen
         raise EmailAlreadyExistsError(f"Email already exists: {data.email}") from exc
 
     await db.refresh(user, attribute_names=["role"])
+
+    await log_audit(
+        db, table_name="users", record_id=user.id, action=AuditAction.CREATED,
+        actor_id=actor_id, description=f"User '{user.email}' created",
+    )
 
     try:
         await send_new_user_credentials_email(email_sender, user.email, password)
@@ -119,14 +126,19 @@ async def list_users(
     return list(result.scalars().all())
 
 
-async def soft_delete_user(db: AsyncSession, user_id: int) -> None:
+async def soft_delete_user(db: AsyncSession, user_id: int, actor_id: int) -> None:
     result = await db.execute(select(User).where(User.id == user_id, User.is_delete.is_(False)))
     user = result.scalar_one_or_none()
     if user is None:
         raise UserNotFoundError(f"User not found: {user_id}")
 
+    email = user.email
     user.is_delete = True
     await db.flush()
+    await log_audit(
+        db, table_name="users", record_id=user_id, action=AuditAction.DEACTIVATED,
+        actor_id=actor_id, description=f"User '{email}' deactivated",
+    )
 
 
 class IncorrectPasswordError(Exception):
@@ -150,6 +162,10 @@ async def change_password(db: AsyncSession, user: User, current_password: str, n
     # "iat" claim (also naive UTC) in rbac_middleware.enforce_rbac.
     user.password_changed_at = datetime.now(UTC).replace(tzinfo=None)
     await db.flush()
+    await log_audit(
+        db, table_name="users", record_id=user.id, action=AuditAction.UPDATED,
+        actor_id=user.id, description=f"User '{user.email}' changed their password",
+    )
 
 
 class UnsupportedImageTypeError(UnsupportedFileTypeError):

@@ -16,10 +16,11 @@ from app.models.deal import Deal
 from app.models.deal_contact import DealContact
 from app.models.deal_stage import DealStage
 from app.models.deal_stage_history import DealStageHistory
-from app.models.enums import LeadTier, NotificationType
+from app.models.enums import AuditAction, LeadTier, NotificationType
 from app.models.user import User
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountNotFoundError, get_account
+from app.services.audit_service import log_audit
 from app.services.contact_service import ContactNotFoundError, get_contact
 from app.services.notification_service import create_notification
 
@@ -121,6 +122,10 @@ async def create_deal(db: AsyncSession, data: DealCreate, requester: User) -> De
         )
     )
     await db.flush()
+    await log_audit(
+        db, table_name="deals", record_id=deal.id, action=AuditAction.CREATED,
+        actor_id=requester.id, description=f"Deal '{deal.deal_name}' created",
+    )
     return deal
 
 
@@ -273,6 +278,8 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
         await _get_stage_or_raise(db, updates["stage_id"])
 
     old_stage_id = deal.stage_id
+    stage_changed = "stage_id" in updates and updates["stage_id"] != old_stage_id
+    old_stage = await _get_stage_or_raise(db, old_stage_id) if stage_changed else None
 
     for field, value in updates.items():
         setattr(deal, field, value)
@@ -280,7 +287,7 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
     if contact_ids_set:
         await _set_deal_contacts(db, deal.id, data.contact_ids or [])
 
-    if "stage_id" in updates and updates["stage_id"] != old_stage_id:
+    if stage_changed:
         db.add(
             DealStageHistory(
                 deal_id=deal.id,
@@ -307,13 +314,27 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
         raise ColdReasonRequiredError("cold_reason is required when the stage is cold")
 
     await db.flush()
+    description = (
+        f"Deal '{deal.deal_name}' moved from '{old_stage.name}' to '{current_stage.name}'"
+        if old_stage is not None
+        else f"Deal '{deal.deal_name}' updated"
+    )
+    await log_audit(
+        db, table_name="deals", record_id=deal.id, action=AuditAction.UPDATED,
+        actor_id=requester.id, description=description,
+    )
     return deal
 
 
 async def delete_deal(db: AsyncSession, deal_id: int, requester: User) -> None:
     deal = await _get_deal_or_raise(db, deal_id, requester)
+    deal_id_, deal_name = deal.id, deal.deal_name
     await db.delete(deal)
     await db.flush()
+    await log_audit(
+        db, table_name="deals", record_id=deal_id_, action=AuditAction.DELETED,
+        actor_id=requester.id, description=f"Deal '{deal_name}' deleted",
+    )
 
 
 async def list_stage_history(

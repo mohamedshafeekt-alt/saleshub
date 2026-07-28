@@ -46,6 +46,38 @@ _CREATE_TOUCH_LEAD_UPDATED_AT_STATEMENTS = [
     """,
 ]
 
+# Same reasoning as above, mirrored for accounts/deals (see c9d8e7f6a5b4).
+_CREATE_TOUCH_ACCOUNT_AND_DEAL_UPDATED_AT_STATEMENTS = [
+    """
+    CREATE OR REPLACE FUNCTION touch_account_updated_at() RETURNS TRIGGER AS $$
+    BEGIN
+        UPDATE accounts SET updated_at = clock_timestamp() WHERE id = NEW.account_id;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS account_activities_touch_account_updated_at ON account_activities;",
+    """
+    CREATE TRIGGER account_activities_touch_account_updated_at
+    AFTER INSERT ON account_activities
+    FOR EACH ROW EXECUTE FUNCTION touch_account_updated_at();
+    """,
+    """
+    CREATE OR REPLACE FUNCTION touch_deal_updated_at() RETURNS TRIGGER AS $$
+    BEGIN
+        UPDATE deals SET updated_at = clock_timestamp() WHERE id = NEW.deal_id;
+        RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql;
+    """,
+    "DROP TRIGGER IF EXISTS deal_activities_touch_deal_updated_at ON deal_activities;",
+    """
+    CREATE TRIGGER deal_activities_touch_deal_updated_at
+    AFTER INSERT ON deal_activities
+    FOR EACH ROW EXECUTE FUNCTION touch_deal_updated_at();
+    """,
+]
+
 
 @pytest_asyncio.fixture(scope="session")
 async def engine() -> AsyncGenerator[AsyncEngine, None]:
@@ -55,6 +87,8 @@ async def engine() -> AsyncGenerator[AsyncEngine, None]:
     async with eng.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
         for statement in _CREATE_TOUCH_LEAD_UPDATED_AT_STATEMENTS:
+            await conn.execute(text(statement))
+        for statement in _CREATE_TOUCH_ACCOUNT_AND_DEAL_UPDATED_AT_STATEMENTS:
             await conn.execute(text(statement))
 
     session_factory = async_sessionmaker(eng, expire_on_commit=False)

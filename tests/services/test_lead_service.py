@@ -61,7 +61,7 @@ async def test_create_lead_succeeds(db_session: AsyncSession):
         source=LeadSource.WEBSITE,
         owner_id=owner.id,
     )
-    lead = await create_lead(db_session, data, FakeEmailSender())
+    lead = await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
     assert lead.id is not None
     assert lead.email == "jane@acme.com"
@@ -87,7 +87,7 @@ async def test_create_lead_owner_relationship_is_loaded_even_when_owner_row_was_
         source=LeadSource.WEBSITE,
         owner_id=owner.id,
     )
-    lead = await create_lead(db_session, data, FakeEmailSender())
+    lead = await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
     assert lead.owner is not None
     assert lead.owner.id == owner.id
@@ -105,7 +105,7 @@ async def test_create_lead_inserts_primary_contact_into_lead_contacts(db_session
         source=LeadSource.WEBSITE,
         owner_id=owner.id,
     )
-    lead = await create_lead(db_session, data, FakeEmailSender())
+    lead = await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
     result = await db_session.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
     contacts = result.scalars().all()
@@ -126,7 +126,7 @@ async def test_create_lead_inserts_extra_contacts_alongside_primary(db_session: 
         owner_id=owner.id,
         contacts=[LeadContactInput(email="second@acme.com"), LeadContactInput(email="third@acme.com")],
     )
-    lead = await create_lead(db_session, data, FakeEmailSender())
+    lead = await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
     result = await db_session.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
     emails = {contact.email for contact in result.scalars().all()}
@@ -146,7 +146,7 @@ async def test_create_lead_notifies_all_admins(db_session: AsyncSession):
         email="notify-admins@acme.com",
         source=LeadSource.WEBSITE,
     )
-    await create_lead(db_session, data, fake_sender)
+    await create_lead(db_session, data, fake_sender, requester=admin_a)
 
     notified = {call["to"] for call in fake_sender.calls}
     assert notified == {admin_a.email, admin_b.email}
@@ -163,7 +163,7 @@ async def test_create_lead_creates_in_app_notifications_for_notifiable_users(db_
         email="notify-in-app@acme.com",
         source=LeadSource.WEBSITE,
     )
-    lead = await create_lead(db_session, data, FakeEmailSender())
+    lead = await create_lead(db_session, data, FakeEmailSender(), requester=admin)
 
     result = await db_session.execute(
         select(Notification).where(
@@ -200,7 +200,7 @@ async def test_create_lead_duplicate_email_raises(db_session: AsyncSession):
         source=LeadSource.WEBSITE,
         owner_id=owner.id,
     )
-    await create_lead(db_session, data, FakeEmailSender())
+    await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
     dup_data = LeadUpsert(
         first_name="John",
@@ -210,7 +210,7 @@ async def test_create_lead_duplicate_email_raises(db_session: AsyncSession):
         owner_id=owner.id,
     )
     with pytest.raises(DuplicateLeadEmailError):
-        await create_lead(db_session, dup_data, FakeEmailSender())
+        await create_lead(db_session, dup_data, FakeEmailSender(), requester=owner)
 
 
 async def test_create_lead_duplicate_extra_contact_email_raises(db_session: AsyncSession):
@@ -224,7 +224,7 @@ async def test_create_lead_duplicate_extra_contact_email_raises(db_session: Asyn
         owner_id=owner.id,
         contacts=[LeadContactInput(email="extra-dup@acme.com")],
     )
-    await create_lead(db_session, data, FakeEmailSender())
+    await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
     dup_data = LeadUpsert(
         first_name="John",
@@ -235,12 +235,13 @@ async def test_create_lead_duplicate_extra_contact_email_raises(db_session: Asyn
         contacts=[LeadContactInput(email="extra-dup@acme.com")],
     )
     with pytest.raises(DuplicateLeadEmailError):
-        await create_lead(db_session, dup_data, FakeEmailSender())
+        await create_lead(db_session, dup_data, FakeEmailSender(), requester=owner)
 
 
 async def test_create_lead_bad_owner_id_raises_integrity_error_not_duplicate_email(db_session: AsyncSession):
     # A foreign-key violation on owner_id must not be mislabeled as a
     # duplicate-email conflict just because both errors are IntegrityErrors.
+    requester = await _make_user(db_session, "bad-owner-requester@example.com", UserRole.SALES_MANAGER)
     data = LeadUpsert(
         first_name="Jane",
         company="Acme Corp",
@@ -249,7 +250,7 @@ async def test_create_lead_bad_owner_id_raises_integrity_error_not_duplicate_ema
         owner_id=999_999_999,
     )
     with pytest.raises(IntegrityError):
-        await create_lead(db_session, data, FakeEmailSender())
+        await create_lead(db_session, data, FakeEmailSender(), requester=requester)
 
 
 async def test_list_leads_sales_rep_owner_id_param_does_not_leak_other_reps_leads(
@@ -545,3 +546,68 @@ async def test_export_leads_sees_all_for_view_all_role(db_session: AsyncSession,
     rows = await export_leads(db_session, requester=manager)
 
     assert len(rows) >= 2
+
+
+async def test_create_lead_writes_audit_log(db_session, make_user):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+    from app.services.email.sender import EmailSender
+    from app.services.lead_service import create_lead
+    from app.schemas.lead import LeadUpsert
+
+    class _NoopSender(EmailSender):
+        async def send(self, *args, **kwargs):
+            pass
+
+    owner = await make_user(email="lead-audit-owner@example.com")
+    data = LeadUpsert(
+        first_name="A", last_name="B", email="lead-audit@example.com",
+        company="Acme", source="website", owner_id=owner.id,
+    )
+    lead = await create_lead(db_session, data, _NoopSender(), requester=owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "leads", AuditLog.record_id == lead.id)
+    )
+    entry = result.scalar_one()
+    assert entry.action == "created"
+    assert entry.actor_id == owner.id
+
+
+async def test_update_lead_writes_audit_log(db_session, make_user, make_lead):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+    from app.services.lead_service import update_lead
+    from app.schemas.lead import LeadUpsert
+
+    owner = await make_user(email="lead-audit-owner2@example.com")
+    lead = await make_lead(owner_id=owner.id, email="lead-audit-2@example.com")
+    data = LeadUpsert(
+        id=lead.id, first_name=lead.first_name, last_name=lead.last_name,
+        email=lead.email, company="Updated Co", source=lead.source, owner_id=owner.id,
+    )
+    await update_lead(db_session, lead.id, data, requester=owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "leads", AuditLog.record_id == lead.id, AuditLog.action == "updated")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_delete_lead_writes_audit_log(db_session, make_user, make_lead):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+    from app.services.lead_service import delete_lead
+
+    owner = await make_user(email="lead-audit-owner3@example.com")
+    lead = await make_lead(owner_id=owner.id, email="lead-audit-3@example.com")
+    lead_id = lead.id
+    await delete_lead(db_session, lead_id, requester=owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "leads", AuditLog.record_id == lead_id, AuditLog.action == "deleted")
+    )
+    assert result.scalar_one() is not None

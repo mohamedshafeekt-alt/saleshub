@@ -9,8 +9,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
 from app.core.security import create_access_token, create_refresh_token, hash_token
+from app.models.enums import AuditAction
 from app.models.refresh_token import RefreshToken
 from app.models.user import User
+from app.services.audit_service import log_audit
 
 
 class InvalidRefreshTokenError(Exception):
@@ -37,6 +39,14 @@ async def issue_tokens(db: AsyncSession, user: User) -> tuple[str, str]:
             token_hash=hash_token(refresh_token),
             expires_at=_now_ist() + timedelta(days=settings.refresh_token_expire_days),
         )
+    )
+    await log_audit(
+        db,
+        table_name="users",
+        record_id=user.id,
+        action=AuditAction.LOGIN,
+        actor_id=user.id,
+        description=f"User '{user.email}' logged in",
     )
     await db.commit()
     return access_token, refresh_token
@@ -65,6 +75,14 @@ async def revoke_refresh_token(db: AsyncSession, user: User, refresh_token: str)
     stored = result.scalar_one_or_none()
     if stored is not None and stored.revoked_at is None:
         stored.revoked_at = _now_ist()
+        await log_audit(
+            db,
+            table_name="users",
+            record_id=user.id,
+            action=AuditAction.LOGOUT,
+            actor_id=user.id,
+            description=f"User '{user.email}' logged out",
+        )
         await db.commit()
 
 

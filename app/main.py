@@ -8,6 +8,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.v1 import (
     accounts,
+    audit_log,
     auth,
     contacts,
     deal_stages,
@@ -66,3 +67,4 @@ app.include_router(notifications.router, prefix="/api/v1")
 app.include_router(permissions.router, prefix="/api/v1")
 app.include_router(roles.router, prefix="/api/v1")
 app.include_router(search.router, prefix="/api/v1")
+app.include_router(audit_log.router, prefix="/api/v1")

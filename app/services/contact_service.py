@@ -20,8 +20,10 @@ from app.models.account import Account
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.deal_contact import DealContact
-from app.models.enums import LeadTier
+from app.models.enums import AuditAction, LeadTier
+from app.models.user import User
 from app.schemas.contact import ContactCreate, ContactUpdate
+from app.services.audit_service import log_audit
 
 _OVERVIEW_EAGER_LOAD = (selectinload(Contact.contact_accounts).selectinload(ContactAccount.account),)
 
@@ -45,7 +47,7 @@ def _is_duplicate_email_violation(exc: IntegrityError) -> bool:
     return "ix_contacts_email" in str(exc.orig)
 
 
-async def create_contact(db: AsyncSession, data: ContactCreate) -> Contact:
+async def create_contact(db: AsyncSession, data: ContactCreate, requester: User) -> Contact:
     contact = Contact(**data.model_dump())
     db.add(contact)
     try:
@@ -55,6 +57,12 @@ async def create_contact(db: AsyncSession, data: ContactCreate) -> Contact:
         if _is_duplicate_email_violation(exc):
             raise DuplicateContactEmailError(f"Email already exists: {data.email}") from exc
         raise
+
+    name = f"{contact.first_name} {contact.last_name or ''}".strip()
+    await log_audit(
+        db, table_name="contacts", record_id=contact.id, action=AuditAction.CREATED,
+        actor_id=requester.id, description=f"Contact '{name}' created",
+    )
     return contact
 
 
@@ -70,7 +78,7 @@ async def get_contact(db: AsyncSession, contact_id: int) -> Contact:
     return await _get_contact_or_raise(db, contact_id)
 
 
-async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate) -> Contact:
+async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate, requester: User) -> Contact:
     contact = await _get_contact_or_raise(db, contact_id)
 
     for field, value in data.model_dump(exclude_unset=True).items():
@@ -83,13 +91,25 @@ async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate)
         if _is_duplicate_email_violation(exc):
             raise DuplicateContactEmailError(f"Email already exists: {data.email}") from exc
         raise
+
+    name = f"{contact.first_name} {contact.last_name or ''}".strip()
+    await log_audit(
+        db, table_name="contacts", record_id=contact.id, action=AuditAction.UPDATED,
+        actor_id=requester.id, description=f"Contact '{name}' updated",
+    )
     return contact
 
 
-async def delete_contact(db: AsyncSession, contact_id: int) -> None:
+async def delete_contact(db: AsyncSession, contact_id: int, requester: User) -> None:
     contact = await _get_contact_or_raise(db, contact_id)
+    contact_id_ = contact.id
+    name = f"{contact.first_name} {contact.last_name or ''}".strip()
     await db.delete(contact)
     await db.flush()
+    await log_audit(
+        db, table_name="contacts", record_id=contact_id_, action=AuditAction.DELETED,
+        actor_id=requester.id, description=f"Contact '{name}' deleted",
+    )
 
 
 def _primary_account_link(contact: Contact) -> ContactAccount | None:

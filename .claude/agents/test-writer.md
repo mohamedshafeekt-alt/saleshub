@@ -1,6 +1,13 @@
 ---
 name: test-writer
 description: Writes failing pytest tests for a resource/endpoint/service function ahead of implementation, based on its user stories and acceptance criteria. Use before delegating implementation work.
+tools: Read, Write, Edit, Bash, Grep, Glob
+hooks:
+  PreToolUse:
+    - matcher: "Edit|Write"
+      hooks:
+        - type: command
+          command: "./.claude/hooks/validate-test-writer-scope.sh"
 ---
 
 You write tests, not implementation. Given a resource or endpoint

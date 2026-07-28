@@ -33,11 +33,12 @@ router = APIRouter(prefix="/users", tags=["users"])
 @requires_permission(USERS_MANAGE)
 async def create_user_route(
     data: UserCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     email_sender: EmailSender = Depends(get_email_sender),
 ) -> UserRead:
     try:
-        user = await create_user(db, data, email_sender)
+        user = await create_user(db, data, email_sender, actor_id=current_user.id)
     except EmailAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except RoleNotFoundError as exc:
@@ -112,9 +113,13 @@ async def list_users_route(
 
 @router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
 @requires_permission(USERS_MANAGE)
-async def delete_user_route(user_id: int, db: AsyncSession = Depends(get_db)) -> None:
+async def delete_user_route(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
     try:
-        await soft_delete_user(db, user_id)
+        await soft_delete_user(db, user_id, actor_id=current_user.id)
     except UserNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 
 from app.core.logging import logger
 from app.core.permission_codes import LEADS_NOTIFY_ON_CREATE, LEADS_VIEW_ALL
-from app.models.enums import LeadSource, LeadStatus, NotificationType
+from app.models.enums import AuditAction, LeadSource, LeadStatus, NotificationType
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.models.lead_contact import LeadContact
@@ -22,6 +22,7 @@ from app.schemas.lead import LeadUpsert
 from app.services.email.sender import EmailSender
 from app.services.email.templates import send_new_lead_notification_email
 from app.services.notification_service import create_notification
+from app.services.audit_service import log_audit
 
 
 class DuplicateLeadEmailError(Exception):
@@ -44,7 +45,7 @@ def _is_duplicate_email_violation(exc: IntegrityError) -> bool:
     return "ix_leads_email" in str(exc.orig) or "ix_lead_contacts_email" in str(exc.orig)
 
 
-async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSender) -> Lead:
+async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSender, requester: User) -> Lead:
     lead_data = data.model_dump(exclude={"id", "contacts"})
     lead_data["status"] = lead_data["status"] or LeadStatus.NOT_CONTACTED
     lead = Lead(**lead_data)
@@ -100,6 +101,11 @@ async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSen
     # the requester and the assigned owner are often the same already-loaded
     # session identity; a distinct owner in a fresh request session needs this.
     await db.refresh(lead, attribute_names=["owner"])
+
+    await log_audit(
+        db, table_name="leads", record_id=lead.id, action=AuditAction.CREATED,
+        actor_id=requester.id, description=f"Lead '{lead_name} at {lead.company}' created",
+    )
 
     return lead
 
@@ -277,10 +283,22 @@ async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requeste
     # serialization) would raise MissingGreenlet. Refresh now, while still awaitable.
     await db.refresh(lead)
 
+    await log_audit(
+        db, table_name="leads", record_id=lead.id, action=AuditAction.UPDATED,
+        actor_id=requester.id,
+        description=f"Lead '{f'{lead.first_name} {lead.last_name}'.strip()} at {lead.company}' updated",
+    )
+
     return lead
 
 
 async def delete_lead(db: AsyncSession, lead_id: int, requester: User) -> None:
     lead = await _get_lead_or_raise(db, lead_id, requester)
+    lead_id_, company = lead.id, lead.company
+    lead_name = f"{lead.first_name} {lead.last_name}".strip()
     await db.delete(lead)
     await db.flush()
+    await log_audit(
+        db, table_name="leads", record_id=lead_id_, action=AuditAction.DELETED,
+        actor_id=requester.id, description=f"Lead '{lead_name} at {company}' deleted",
+    )

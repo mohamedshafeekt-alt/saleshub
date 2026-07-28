@@ -81,6 +81,27 @@ async def test_create_account_contact_creates_contact_and_link(db_session: Async
     assert contact_account.is_primary is True
 
 
+async def test_create_account_contact_writes_audit_log(db_session: AsyncSession):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    owner = await _make_user(db_session, "owner-cac-audit-create@example.com", UserRole.SALES_REP)
+    account = await _make_account(db_session, owner.id, company="Audit Contact Co")
+
+    data = AccountContactUpsert(
+        first_name="Priya", last_name="Nair", email="priya-cac-audit@example.com",
+    )
+    contact, _ = await create_account_contact(db_session, account.id, data, requester=owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "contacts", AuditLog.record_id == contact.id)
+    )
+    entry = result.scalar_one()
+    assert entry.action == "created"
+    assert entry.actor_id == owner.id
+
+
 async def test_create_account_contact_raises_not_found_for_nonexistent_account(db_session: AsyncSession):
     requester = await _make_user(db_session, "cac-404@example.com", UserRole.SALES_MANAGER)
 
@@ -178,6 +199,33 @@ async def test_create_account_contact_raises_duplicate_email_for_existing_email_
 
 
 # --- update_account_contact ----------------------------------------------------
+
+
+async def test_update_account_contact_writes_audit_log(db_session: AsyncSession):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    owner = await _make_user(db_session, "owner-uac-audit@example.com", UserRole.SALES_REP)
+    account = await _make_account(db_session, owner.id, company="Audit Update Co")
+    contact, _ = await create_account_contact(
+        db_session,
+        account.id,
+        AccountContactUpsert(first_name="Old", email="old-uac-audit@example.com"),
+        requester=owner,
+    )
+
+    await update_account_contact(
+        db_session, account.id, contact.id,
+        AccountContactUpsert(contact_id=contact.id, first_name="New"), requester=owner,
+    )
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(
+            AuditLog.table_name == "contacts", AuditLog.record_id == contact.id, AuditLog.action == "updated"
+        )
+    )
+    assert result.scalar_one() is not None
 
 
 async def test_update_account_contact_updates_contact_fields(db_session: AsyncSession):
