@@ -191,6 +191,13 @@ async def save_avatar(db: AsyncSession, user: User, content: bytes, content_type
     return user.avatar_url
 
 
+async def remove_avatar(db: AsyncSession, user: User) -> None:
+    if user.avatar_url is not None:
+        _avatar_upload_service.delete(user.avatar_url)
+    user.avatar_url = None
+    await db.flush()
+
+
 async def authenticate_user(db: AsyncSession, email: str, password: str) -> User | None:
     result = await db.execute(select(User).where(User.email == email))
     user = result.scalar_one_or_none()
