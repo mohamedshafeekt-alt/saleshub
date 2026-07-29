@@ -92,7 +92,7 @@ async def test_create_deal_with_multiple_contact_ids(
     )
     deal = await create_deal(db_session, data, requester=owner)
 
-    linked_ids = {cid for cid, _name in await get_deal_contact_ids(db_session, deal.id)}
+    linked_ids = {cid for cid, _name, _email, _phone in await get_deal_contact_ids(db_session, deal.id)}
     assert linked_ids == {contact_a.id, contact_b.id}
 
 
@@ -496,7 +496,7 @@ async def test_update_deal_can_set_tier_and_contacts(
     )
 
     assert updated.tier == LeadTier.SILVER
-    linked_ids = {cid for cid, _name in await get_deal_contact_ids(db_session, updated.id)}
+    linked_ids = {cid for cid, _name, _email, _phone in await get_deal_contact_ids(db_session, updated.id)}
     assert linked_ids == {contact_a.id, contact_b.id}
 
 
@@ -515,7 +515,7 @@ async def test_update_deal_omitting_contact_ids_leaves_links_untouched(
     )
 
     assert updated.deal_name == "Renamed"
-    assert [cid for cid, _name in await get_deal_contact_ids(db_session, updated.id)] == [contact.id]
+    assert [cid for cid, _name, _email, _phone in await get_deal_contact_ids(db_session, updated.id)] == [contact.id]
 
 
 async def test_update_deal_with_empty_contact_ids_clears_links(

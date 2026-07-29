@@ -43,6 +43,8 @@ class DealUpdate(BaseModel):
 class DealContactRead(BaseModel):
     id: int
     name: str
+    email: str
+    phone: str | None
 
 
 class DealRead(ORMBase):

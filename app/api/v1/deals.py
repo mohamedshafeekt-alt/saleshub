@@ -76,8 +76,11 @@ _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.
 router = APIRouter(prefix="/deals", tags=["deals"])
 
 
-def _deal_read(deal: object, contact_ids: list[tuple[int, str]]) -> DealRead:
-    contacts = [DealContactRead(id=cid, name=name) for cid, name in contact_ids]
+def _deal_read(deal: object, contact_ids: list[tuple[int, str, str, str | None]]) -> DealRead:
+    contacts = [
+        DealContactRead(id=cid, name=name, email=email, phone=phone)
+        for cid, name, email, phone in contact_ids
+    ]
     return DealRead.model_validate(deal).model_copy(update={"contacts": contacts})
 
 

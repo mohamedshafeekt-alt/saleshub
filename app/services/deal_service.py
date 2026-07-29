@@ -81,29 +81,29 @@ _CONTACT_NAME = func.trim(
 )
 
 
-async def get_deal_contact_ids(db: AsyncSession, deal_id: int) -> list[tuple[int, str]]:
+async def get_deal_contact_ids(db: AsyncSession, deal_id: int) -> list[tuple[int, str, str, str | None]]:
     result = await db.execute(
-        select(DealContact.contact_id, _CONTACT_NAME)
+        select(DealContact.contact_id, _CONTACT_NAME, Contact.email, Contact.phone)
         .join(Contact, Contact.id == DealContact.contact_id)
         .where(DealContact.deal_id == deal_id)
     )
-    return [(cid, name) for cid, name in result.all()]
+    return [(cid, name, email, phone) for cid, name, email, phone in result.all()]
 
 
 async def get_deal_contact_ids_by_deal(
     db: AsyncSession, deal_ids: list[int]
-) -> dict[int, list[tuple[int, str]]]:
-    """Batched contact id+name lookup for a list of deal ids, to avoid N+1 in list/board views."""
+) -> dict[int, list[tuple[int, str, str, str | None]]]:
+    """Batched contact id+name+email+phone lookup for a list of deal ids, to avoid N+1 in list/board views."""
     if not deal_ids:
         return {}
     result = await db.execute(
-        select(DealContact.deal_id, DealContact.contact_id, _CONTACT_NAME)
+        select(DealContact.deal_id, DealContact.contact_id, _CONTACT_NAME, Contact.email, Contact.phone)
         .join(Contact, Contact.id == DealContact.contact_id)
         .where(DealContact.deal_id.in_(deal_ids))
     )
-    by_deal: dict[int, list[tuple[int, str]]] = {deal_id: [] for deal_id in deal_ids}
-    for deal_id, contact_id, name in result.all():
-        by_deal[deal_id].append((contact_id, name))
+    by_deal: dict[int, list[tuple[int, str, str, str | None]]] = {deal_id: [] for deal_id in deal_ids}
+    for deal_id, contact_id, name, email, phone in result.all():
+        by_deal[deal_id].append((contact_id, name, email, phone))
     return by_deal
 
 
@@ -427,7 +427,7 @@ async def export_deals(
         {
             "deal_name": row[1],
             "account": row[2],
-            "contact": ", ".join(name for _cid, name in contacts_by_deal.get(row[0], [])) or None,
+            "contact": ", ".join(name for _cid, name, _email, _phone in contacts_by_deal.get(row[0], [])) or None,
             "value": row[3],
             "currency": row[4],
             "stage": row[5],
