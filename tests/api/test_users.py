@@ -332,7 +332,7 @@ async def test_user_read_status_reflects_active_and_deactivated(
     assert by_email[deactivated.email]["status"] == "deactivated"
 
 
-async def test_delete_user_as_admin_returns_204_and_excludes_from_list(
+async def test_delete_user_as_admin_returns_204_and_shows_as_deactivated(
     client: AsyncClient, make_user, auth_headers
 ):
     admin = await make_user(email="admin-deleter@example.com", role=UserRole.ADMIN)
@@ -342,9 +342,9 @@ async def test_delete_user_as_admin_returns_204_and_excludes_from_list(
     response = await client.delete(f"{USERS_URL}/{target.id}", headers=headers)
     assert response.status_code == 204
 
-    list_response = await client.get(USERS_URL, headers=headers)
-    emails = {u["email"] for u in list_response.json()}
-    assert target.email not in emails
+    list_response = await client.get(USERS_URL, params={"status": "deactivated"}, headers=headers)
+    by_email = {u["email"]: u for u in list_response.json()}
+    assert by_email[target.email]["status"] == "deactivated"
 
 
 async def test_delete_user_as_sales_rep_returns_403(client: AsyncClient, make_user, auth_headers):
@@ -554,5 +554,26 @@ async def test_upload_avatar_no_auth_header_returns_401(client: AsyncClient):
         ME_AVATAR_URL,
         files={"file": ("avatar.png", b"fake-png-bytes", "image/png")},
     )
+
+    assert response.status_code == 401
+
+
+async def test_delete_avatar_clears_avatar_url(client: AsyncClient, make_user, auth_headers):
+    user = await make_user(email="delete-avatar@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(user)
+    await client.post(
+        ME_AVATAR_URL,
+        headers=headers,
+        files={"file": ("avatar.png", b"fake-png-bytes", "image/png")},
+    )
+
+    response = await client.delete(ME_AVATAR_URL, headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["avatar_url"] is None
+
+
+async def test_delete_avatar_no_auth_header_returns_401(client: AsyncClient):
+    response = await client.delete(ME_AVATAR_URL)
 
     assert response.status_code == 401
