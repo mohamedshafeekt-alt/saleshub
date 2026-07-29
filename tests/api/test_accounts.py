@@ -21,6 +21,9 @@ unsupported content type, 404 for a nonexistent account, 403 for a
 non-owning Sales Rep, 200 list + 204 delete.
 """
 
+import io
+
+import openpyxl
 from httpx import AsyncClient
 
 from tests.support.roles import UserRole
@@ -470,6 +473,49 @@ async def test_list_accounts_filters_by_search(client: AsyncClient, make_user, a
 
     assert response.status_code == 200
     assert [account["id"] for account in response.json()["items"]] == [match.id]
+
+
+async def test_list_accounts_to_export_returns_valid_xlsx(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    owner = await make_user(email="rep-export-account@example.com", role=UserRole.SALES_REP)
+    await make_account(owner_id=owner.id, company="List Export Account Co")
+    headers = auth_headers(owner)
+
+    response = await client.get(ACCOUNTS_URL, params={"to_export": "true"}, headers=headers)
+
+    assert response.status_code == 200
+    assert (
+        response.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "accounts.xlsx" in response.headers["content-disposition"]
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    sheet = workbook.active
+    header = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+    assert header == ["Company", "Domain", "Tier", "Industry", "City", "Owner"]
+    data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    assert any(row[0] == "List Export Account Co" for row in data_rows)
+
+
+async def test_get_account_to_export_returns_account_contacts_deals_sheets(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    owner = await make_user(email="rep-export-single-account@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Single Export Account Co")
+    headers = auth_headers(owner)
+
+    response = await client.get(
+        f"{ACCOUNTS_URL}/{account.id}", params={"to_export": "true"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert f"account_{account.id}.xlsx" in response.headers["content-disposition"]
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    assert workbook.sheetnames == ["Account", "Contacts", "Deals"]
+    account_sheet = workbook["Account"]
+    field_col = [cell.value for cell in account_sheet["A"]]
+    assert "Company" in field_col
 
 
 async def test_get_account_returns_404_for_nonexistent_id(client: AsyncClient, make_user, auth_headers):

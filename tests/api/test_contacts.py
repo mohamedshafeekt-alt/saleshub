@@ -12,8 +12,10 @@ Overview (GET /contacts/{id}/overview), and Contact Deals (GET
 /contacts/{id}/deals) screens.
 """
 
+import io
 import uuid
 
+import openpyxl
 from httpx import AsyncClient
 
 from tests.support.roles import UserRole
@@ -260,6 +262,51 @@ async def test_list_contacts_route_no_auth_header_returns_401(client: AsyncClien
     response = await client.get(CONTACTS_URL)
 
     assert response.status_code == 401
+
+
+async def test_list_contacts_to_export_returns_valid_xlsx(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    owner = await make_user(email="rep-export-contact@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="List Export Contact Co")
+    await make_contact(account_id=account.id, first_name="List", last_name="Export")
+    headers = auth_headers(owner)
+
+    response = await client.get(CONTACTS_URL, params={"to_export": "true"}, headers=headers)
+
+    assert response.status_code == 200
+    assert (
+        response.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert "contacts.xlsx" in response.headers["content-disposition"]
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    sheet = workbook.active
+    header = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
+    assert header == ["Name", "Email", "Phone", "Job Title", "Account", "Owner", "Tier", "Primary"]
+    data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
+    assert any(row[0] == "List Export" for row in data_rows)
+
+
+async def test_get_contact_to_export_returns_contact_and_deals_sheets(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    owner = await make_user(email="rep-export-single-contact@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Single Export Contact Co")
+    contact = await make_contact(account_id=account.id, first_name="Single", last_name="Export")
+    headers = auth_headers(owner)
+
+    response = await client.get(
+        f"{CONTACTS_URL}/{contact.id}", params={"to_export": "true"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert f"contact_{contact.id}.xlsx" in response.headers["content-disposition"]
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    assert workbook.sheetnames == ["Contact", "Deals"]
+    contact_sheet = workbook["Contact"]
+    field_col = [cell.value for cell in contact_sheet["A"]]
+    assert "Email" in field_col
 
 
 # --- GET /contacts/{id}/overview -----------------------------------------------

@@ -6,6 +6,7 @@ or update a contact together with its account link and is_primary flag."""
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
@@ -36,12 +37,14 @@ from app.services.contact_service import (
     DuplicateContactEmailError,
     create_contact,
     delete_contact,
+    export_contacts,
     get_contact,
     get_contact_overview,
     list_contacts,
     update_contact,
 )
 from app.services.deal_service import list_deals_for_contact
+from app.services.export_service import field_value_sheet, rows_to_xlsx, sheets_to_xlsx
 
 _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 _CSV_MEDIA_TYPE = "text/csv"
@@ -111,8 +114,30 @@ async def list_contacts_route(
     search: str | None = Query(None),
     limit: int = Query(20),
     offset: int = Query(0),
+    to_export: bool = Query(False),
     db: AsyncSession = Depends(get_db),
-) -> Page[ContactListItemRead]:
+) -> Page[ContactListItemRead] | StreamingResponse:
+    if to_export:
+        rows = await export_contacts(
+            db, owner_id=owner_id, account_id=account_id, tier=tier, is_primary=is_primary, search=search
+        )
+        buffer = rows_to_xlsx(
+            ["Name", "Email", "Phone", "Job Title", "Account", "Owner", "Tier", "Primary"],
+            [
+                [
+                    row["name"], row["email"], row["phone"], row["job_title"],
+                    row["account"], row["owner"], row["tier"], row["is_primary"],
+                ]
+                for row in rows
+            ],
+            sheet_name="Contacts",
+        )
+        return StreamingResponse(
+            buffer,
+            media_type=_XLSX_MEDIA_TYPE,
+            headers={"Content-Disposition": "attachment; filename=contacts.xlsx"},
+        )
+
     items, total = await list_contacts(
         db,
         owner_id=owner_id,
@@ -190,14 +215,45 @@ async def list_contact_deals_route(
 @router.get("/{contact_id}", response_model=ContactRead)
 async def get_contact_route(
     contact_id: int,
+    to_export: bool = Query(False),
     db: AsyncSession = Depends(get_db),
-) -> ContactRead:
+) -> ContactRead | StreamingResponse:
     try:
         contact = await get_contact(db, contact_id)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    return ContactRead.model_validate(contact)
+    detail = ContactRead.model_validate(contact)
+    if not to_export:
+        return detail
+
+    contact_fields = {
+        "ID": detail.id,
+        "First Name": detail.first_name,
+        "Last Name": detail.last_name,
+        "Email": detail.email,
+        "Phone": detail.phone,
+        "Alternate Phone": detail.alternate_phone,
+        "Job Title": detail.job_title,
+        "LinkedIn URL": detail.linkedin_url,
+    }
+    deals = await list_deals_for_contact(db, contact_id)
+    deal_rows = [
+        [deal.deal_name, deal.value, deal.currency, deal.stage_id,
+         deal.tier.value if deal.tier else None, deal.owner_id, deal.expected_close_date]
+        for deal in deals
+    ]
+    buffer = sheets_to_xlsx(
+        [
+            field_value_sheet("Contact", contact_fields),
+            ("Deals", ["Deal Name", "Value", "Currency", "Stage ID", "Tier", "Owner ID", "Expected Close Date"], deal_rows),
+        ]
+    )
+    return StreamingResponse(
+        buffer,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="contact_{contact_id}.xlsx"'},
+    )
 
 
 @router.patch("/{contact_id}", response_model=ContactRead)

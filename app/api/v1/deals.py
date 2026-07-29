@@ -61,7 +61,7 @@ from app.services.deal_service import (
     list_stage_history,
     update_deal,
 )
-from app.services.export_service import rows_to_xlsx
+from app.services.export_service import field_value_sheet, rows_to_xlsx, sheets_to_xlsx
 from app.services.file_upload_service import UnsupportedFileTypeError
 from app.services.generic_patch_service import (
     GenericPatchFieldNotAllowedError,
@@ -69,6 +69,8 @@ from app.services.generic_patch_service import (
     GenericPatchTableNotAllowedError,
     generic_patch,
 )
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 router = APIRouter(prefix="/deals", tags=["deals"])
 
@@ -97,54 +99,6 @@ async def create_deal_route(
     await db.commit()
     contact_ids = await get_deal_contact_ids(db, deal.id)
     return _deal_read(deal, contact_ids)
-
-
-@router.get("/export")
-async def export_deals_route(
-    stage_id: int | None = Query(None),
-    tier: LeadTier | None = Query(None),
-    search: str | None = Query(None),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> StreamingResponse:
-    rows = await export_deals(db, requester=current_user, stage_id=stage_id, tier=tier, search=search)
-
-    buffer = rows_to_xlsx(
-        [
-            "Deal Name",
-            "Account",
-            "Contact",
-            "Value",
-            "Currency",
-            "Stage",
-            "Tier",
-            "Owner",
-            "Expected Close Date",
-            "Cold Reason",
-        ],
-        [
-            [
-                row["deal_name"],
-                row["account"],
-                row["contact"],
-                row["value"],
-                row["currency"],
-                row["stage"],
-                row["tier"],
-                row["owner"],
-                row["expected_close_date"],
-                row["cold_reason"],
-            ]
-            for row in rows
-        ],
-        sheet_name="Deals",
-    )
-
-    return StreamingResponse(
-        buffer,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=deals.xlsx"},
-    )
 
 
 # Not called by any UI screen: expects raw DB table/column names, which no
@@ -184,9 +138,32 @@ async def list_deals_route(
     sort_dir: Literal["asc", "desc"] = Query("desc"),
     limit: int = Query(20),
     offset: int = Query(0),
+    to_export: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> DealsListResponse:
+) -> DealsListResponse | StreamingResponse:
+    if to_export:
+        rows = await export_deals(db, requester=current_user, stage_id=stage_id, tier=tier, search=search)
+        buffer = rows_to_xlsx(
+            [
+                "Deal Name", "Account", "Contact", "Value", "Currency",
+                "Stage", "Tier", "Owner", "Expected Close Date", "Cold Reason",
+            ],
+            [
+                [
+                    row["deal_name"], row["account"], row["contact"], row["value"], row["currency"],
+                    row["stage"], row["tier"], row["owner"], row["expected_close_date"], row["cold_reason"],
+                ]
+                for row in rows
+            ],
+            sheet_name="Deals",
+        )
+        return StreamingResponse(
+            buffer,
+            media_type=_XLSX_MEDIA_TYPE,
+            headers={"Content-Disposition": "attachment; filename=deals.xlsx"},
+        )
+
     if view == "board":
         columns = await list_deals_board(
             db,
@@ -240,9 +217,10 @@ async def list_deals_route(
 @router.get("/{deal_id}", response_model=DealRead)
 async def get_deal_route(
     deal_id: int,
+    to_export: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> DealRead:
+) -> DealRead | StreamingResponse:
     try:
         deal = await get_deal(db, deal_id, requester=current_user)
     except DealNotFoundError as exc:
@@ -251,7 +229,43 @@ async def get_deal_route(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     contact_ids = await get_deal_contact_ids(db, deal.id)
-    return _deal_read(deal, contact_ids)
+    deal_read = _deal_read(deal, contact_ids)
+    if not to_export:
+        return deal_read
+
+    deal_fields = {
+        "ID": deal_read.id,
+        "Deal Name": deal_read.deal_name,
+        "Account ID": deal_read.account_id,
+        "Contact IDs": ", ".join(str(cid) for cid in deal_read.contact_ids),
+        "Value": deal_read.value,
+        "Currency": deal_read.currency,
+        "Expected Close Date": deal_read.expected_close_date,
+        "Stage ID": deal_read.stage_id,
+        "Tier": deal_read.tier.value if deal_read.tier else None,
+        "Cold Reason": deal_read.cold_reason,
+        "Owner ID": deal_read.owner_id,
+    }
+    history = await list_stage_history(db, deal_id, requester=current_user)
+    history_rows = [
+        [row.from_stage_id, row.to_stage_id, row.changed_by, row.note, row.created_at]
+        for row in history
+    ]
+    buffer = sheets_to_xlsx(
+        [
+            field_value_sheet("Deal", deal_fields),
+            (
+                "Stage History",
+                ["From Stage ID", "To Stage ID", "Changed By", "Note", "Created At"],
+                history_rows,
+            ),
+        ]
+    )
+    return StreamingResponse(
+        buffer,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="deal_{deal_id}.xlsx"'},
+    )
 
 
 @router.patch("/{deal_id}", response_model=DealRead)

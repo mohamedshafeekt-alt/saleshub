@@ -3,6 +3,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
@@ -42,6 +43,7 @@ from app.services.account_service import (
     PrimaryContactAlreadyExistsError,
     create_account,
     delete_account,
+    export_accounts,
     get_account,
     get_account_overview,
     list_accounts,
@@ -55,7 +57,10 @@ from app.services.contact_account_service import (
 )
 from app.services.contact_service import DuplicateContactEmailError
 from app.services.deal_service import list_deals_for_account
+from app.services.export_service import field_value_sheet, rows_to_xlsx, sheets_to_xlsx
 from app.services.file_upload_service import UnsupportedFileTypeError
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -93,9 +98,28 @@ async def list_accounts_route(
     search: str | None = Query(None),
     limit: int = Query(20),
     offset: int = Query(0),
+    to_export: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Page[AccountRead]:
+) -> Page[AccountRead] | StreamingResponse:
+    if to_export:
+        rows = await export_accounts(
+            db, requester=current_user, owner_id=owner_id, tier=tier, industry=industry, search=search
+        )
+        buffer = rows_to_xlsx(
+            ["Company", "Domain", "Tier", "Industry", "City", "Owner"],
+            [
+                [row["company"], row["domain"], row["tier"], row["industry"], row["city"], row["owner"]]
+                for row in rows
+            ],
+            sheet_name="Accounts",
+        )
+        return StreamingResponse(
+            buffer,
+            media_type=_XLSX_MEDIA_TYPE,
+            headers={"Content-Disposition": "attachment; filename=accounts.xlsx"},
+        )
+
     accounts, total = await list_accounts(
         db,
         requester=current_user,
@@ -117,9 +141,10 @@ async def list_accounts_route(
 @router.get("/{account_id}", response_model=AccountRead)
 async def get_account_route(
     account_id: int,
+    to_export: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> AccountRead:
+) -> AccountRead | StreamingResponse:
     try:
         account = await get_account(db, account_id, requester=current_user)
     except AccountNotFoundError as exc:
@@ -127,7 +152,46 @@ async def get_account_route(
     except AccountAccessForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
-    return AccountRead.model_validate(account)
+    detail = AccountRead.model_validate(account)
+    if not to_export:
+        return detail
+
+    account_fields = {
+        "ID": detail.id,
+        "Company": detail.company,
+        "Domain": detail.domain,
+        "Tier": detail.tier.value if detail.tier else None,
+        "Owner ID": detail.owner_id,
+        "Owner": detail.owner_name,
+        "Source Lead ID": detail.source_lead_id,
+        "Industry": detail.industry,
+        "City": detail.city,
+        "Description": detail.description,
+        "LinkedIn URL": detail.linkedin_url,
+        "Contact Count": detail.contact_count,
+        "Deal Count": detail.deal_count,
+    }
+    contact_rows = [
+        [ca.contact.first_name, ca.contact.last_name, ca.contact.email, ca.contact.phone, ca.contact.job_title, ca.is_primary]
+        for ca in account.contact_accounts
+    ]
+    deal_rows = [
+        [deal.deal_name, deal.value, deal.currency, deal.stage_id,
+         deal.tier.value if deal.tier else None, deal.owner_id, deal.expected_close_date]
+        for deal in account.deals
+    ]
+    buffer = sheets_to_xlsx(
+        [
+            field_value_sheet("Account", account_fields),
+            ("Contacts", ["First Name", "Last Name", "Email", "Phone", "Job Title", "Primary"], contact_rows),
+            ("Deals", ["Deal Name", "Value", "Currency", "Stage ID", "Tier", "Owner ID", "Expected Close Date"], deal_rows),
+        ]
+    )
+    return StreamingResponse(
+        buffer,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="account_{account_id}.xlsx"'},
+    )
 
 
 @router.get("/{account_id}/overview", response_model=AccountOverviewRead)

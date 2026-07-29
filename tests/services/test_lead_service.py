@@ -548,6 +548,22 @@ async def test_export_leads_sees_all_for_view_all_role(db_session: AsyncSession,
     assert len(rows) >= 2
 
 
+async def test_export_leads_excludes_converted_leads(db_session: AsyncSession, make_lead):
+    rep = await _make_user(db_session, "rep-converted-export-svc@example.com", UserRole.SALES_REP)
+    converted = await make_lead(
+        owner_id=rep.id, email="converted-export-svc@example.com", is_converted=True, company="Converted Export Co"
+    )
+    open_lead = await make_lead(
+        owner_id=rep.id, email="open-export-svc@example.com", company="Open Export Co"
+    )
+
+    rows = await export_leads(db_session, requester=rep)
+
+    companies = {row["company"] for row in rows}
+    assert converted.company not in companies
+    assert open_lead.company in companies
+
+
 async def test_create_lead_writes_audit_log(db_session, make_user):
     from sqlalchemy import select
     from app.models.audit_log import AuditLog

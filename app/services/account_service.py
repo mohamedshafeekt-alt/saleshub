@@ -1,6 +1,8 @@
 """Account business logic: role-scoped listing/search, ownership-checked
 get/update/delete, and Lead -> Account conversion."""
 
+from typing import Any
+
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -165,6 +167,44 @@ async def list_accounts(
     total = (await db.execute(count_query)).scalar_one()
     items = list((await db.execute(items_query)).scalars().all())
     return items, total
+
+
+async def export_accounts(
+    db: AsyncSession,
+    *,
+    requester: User,
+    owner_id: int | None = None,
+    tier: LeadTier | None = None,
+    industry: str | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    """All accounts matching the requester's role-scoping (same rule as
+    list_accounts). No dedicated no-pagination query -- reuses
+    list_accounts with a large limit.
+    # ponytail: large-limit reuse instead of a bespoke unpaginated query;
+    # switch to a real no-pagination query if account counts get large.
+    """
+    accounts, _total = await list_accounts(
+        db,
+        requester=requester,
+        owner_id=owner_id,
+        tier=tier,
+        industry=industry,
+        search=search,
+        limit=1_000_000,
+        offset=0,
+    )
+    return [
+        {
+            "company": account.company,
+            "domain": account.domain,
+            "tier": account.tier.value if account.tier else None,
+            "industry": account.industry,
+            "city": account.city,
+            "owner": account.owner_name,
+        }
+        for account in accounts
+    ]
 
 
 async def _get_account_or_raise(db: AsyncSession, account_id: int, requester: User) -> Account:

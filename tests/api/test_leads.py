@@ -1209,14 +1209,14 @@ async def test_update_lead_activity_returns_403_for_non_owner(
     assert response.status_code == 403
 
 
-async def test_export_leads_returns_valid_xlsx_with_expected_rows(
+async def test_list_leads_to_export_returns_valid_xlsx_with_expected_rows(
     client: AsyncClient, make_user, auth_headers, make_lead
 ):
     owner = await make_user(email="rep-export-lead@example.com", role=UserRole.SALES_REP)
     await make_lead(owner_id=owner.id, email="export-xlsx-lead@example.com", company="Export Xlsx Lead Co")
     headers = auth_headers(owner)
 
-    response = await client.get(f"{LEADS_URL}/export", headers=headers)
+    response = await client.get(LEADS_URL, params={"to_export": "true"}, headers=headers)
 
     assert response.status_code == 200
     assert (
@@ -1231,3 +1231,36 @@ async def test_export_leads_returns_valid_xlsx_with_expected_rows(
     assert header == ["Name", "Email", "Phone", "Company", "Source", "Status", "Owner"]
     data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
     assert any(row[3] == "Export Xlsx Lead Co" for row in data_rows)
+
+
+async def test_leads_export_route_no_longer_exists(client: AsyncClient, make_user, auth_headers):
+    """"/export" now falls through to GET /leads/{lead_id} and fails int
+    path-param validation (422), since the dedicated /export route is gone."""
+    owner = await make_user(email="rep-old-export-route@example.com", role=UserRole.SALES_REP)
+    response = await client.get(f"{LEADS_URL}/export", headers=auth_headers(owner))
+    assert response.status_code == 422
+
+
+async def test_get_lead_to_export_returns_lead_and_activities_sheets(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-export-single-lead@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(
+        owner_id=owner.id, email="single-export-lead@example.com", company="Single Export Lead Co"
+    )
+    headers = auth_headers(owner)
+
+    response = await client.get(f"{LEADS_URL}/{lead.id}", params={"to_export": "true"}, headers=headers)
+
+    assert response.status_code == 200
+    assert (
+        response.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert f"lead_{lead.id}.xlsx" in response.headers["content-disposition"]
+
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    assert workbook.sheetnames == ["Lead", "Activities"]
+    lead_sheet = workbook["Lead"]
+    field_col = [cell.value for cell in lead_sheet["A"]]
+    assert "Company" in field_col
