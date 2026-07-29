@@ -1,7 +1,7 @@
 """make contacts email not null
 
 Revision ID: e24344f7dfa0
-Revises: 84bf9037d7d8
+Revises: 466aea3dc2c0
 Create Date: 2026-07-24 14:01:09.789419
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = 'e24344f7dfa0'
-down_revision: Union[str, Sequence[str], None] = '84bf9037d7d8'
+down_revision: Union[str, Sequence[str], None] = '466aea3dc2c0'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
