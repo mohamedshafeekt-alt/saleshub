@@ -8,11 +8,13 @@ rename, delete, or add to them afterward via /roles.
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.permission_codes import (
     ACCOUNTS_ACCESS,
     ACCOUNTS_DELETE_ANY_ACTIVITY,
     ACCOUNTS_VIEW_ALL,
+    AUDIT_LOG_VIEW,
     CONTACTS_ACCESS,
     DEALS_ACCESS,
     DEALS_DELETE_ANY_ACTIVITY,
@@ -63,6 +65,7 @@ _PERMISSIONS = [
         "Deals",
     ),
     (CONTACTS_ACCESS, "Access Contacts", "View and manage contacts", "Contacts"),
+    (AUDIT_LOG_VIEW, "View Audit Log", "View the system-wide audit log", "Audit Log"),
 ]
 
 STARTER_ROLES = {
@@ -89,18 +92,21 @@ async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, Role]:
     existing_permissions = (await db.execute(select(Permission))).scalars().all()
     by_code = {permission.code: permission for permission in existing_permissions}
 
+    newly_inserted_codes: set[str] = set()
     for code, label, description, module in _PERMISSIONS:
         if code not in by_code:
             permission = Permission(code=code, label=label, description=description, module=module)
             db.add(permission)
             by_code[code] = permission
+            newly_inserted_codes.add(code)
     await db.flush()
 
-    existing_roles = (await db.execute(select(Role))).scalars().all()
+    existing_roles = (await db.execute(select(Role).options(selectinload(Role.permissions)))).scalars().all()
     roles_by_name = {role.name: role for role in existing_roles}
 
     for name, codes in STARTER_ROLES.items():
-        if name not in roles_by_name:
+        role = roles_by_name.get(name)
+        if role is None:
             role = Role(
                 name=name,
                 description=f"Starter role: {name}",
@@ -108,6 +114,17 @@ async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, Role]:
             )
             db.add(role)
             roles_by_name[name] = role
+        else:
+            # Existing role: only grant permission codes that are brand-new
+            # to the whole permissions table in this run (i.e. just added to
+            # _PERMISSIONS in code and never seeded before). A code that
+            # already existed before this run but is missing from this
+            # role's current assignment is left alone -- that's assumed to
+            # be a deliberate admin removal via /roles, not a gap to backfill.
+            role_codes = {permission.code for permission in role.permissions}
+            for code in codes:
+                if code not in role_codes and code in newly_inserted_codes:
+                    role.permissions.append(by_code[code])
     await db.flush()
 
     return roles_by_name

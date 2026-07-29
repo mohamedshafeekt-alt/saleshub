@@ -142,29 +142,30 @@ async def test_list_users_filters_by_status_deactivated(db_session: AsyncSession
 async def test_soft_delete_user_sets_is_delete_true(db_session: AsyncSession):
     user = await _make_user(db_session, "soft-delete-me@example.com")
 
-    await soft_delete_user(db_session, user.id)
+    await soft_delete_user(db_session, user.id, actor_id=user.id)
 
     await db_session.refresh(user)
     assert user.is_delete is True
 
 
 async def test_soft_delete_user_missing_id_raises_not_found(db_session: AsyncSession):
+    user = await _make_user(db_session, "acting-user-missing-id@example.com")
     with pytest.raises(UserNotFoundError):
-        await soft_delete_user(db_session, 999_999)
+        await soft_delete_user(db_session, 999_999, actor_id=user.id)
 
 
 async def test_soft_delete_user_already_deleted_raises_not_found(db_session: AsyncSession):
     user = await _make_user(db_session, "already-deleted@example.com")
-    await soft_delete_user(db_session, user.id)
+    await soft_delete_user(db_session, user.id, actor_id=user.id)
 
     with pytest.raises(UserNotFoundError):
-        await soft_delete_user(db_session, user.id)
+        await soft_delete_user(db_session, user.id, actor_id=user.id)
 
 
 async def test_list_users_excludes_soft_deleted(db_session: AsyncSession):
     kept = await _make_user(db_session, "kept@example.com")
     deleted = await _make_user(db_session, "deleted-from-list@example.com")
-    await soft_delete_user(db_session, deleted.id)
+    await soft_delete_user(db_session, deleted.id, actor_id=kept.id)
 
     users = await list_users(db_session)
 
@@ -175,7 +176,8 @@ async def test_list_users_excludes_soft_deleted(db_session: AsyncSession):
 
 async def test_create_user_reactivates_soft_deleted_email(db_session: AsyncSession):
     original = await _make_user(db_session, "reactivate-me@example.com", role=UserRole.SALES_REP)
-    await soft_delete_user(db_session, original.id)
+    admin_actor = await _make_user(db_session, "reactivate-admin-actor@example.com", role=UserRole.ADMIN)
+    await soft_delete_user(db_session, original.id, actor_id=admin_actor.id)
     admin_role_id = await role_id_for(db_session, UserRole.ADMIN)
 
     reactivated = await create_user(
@@ -187,6 +189,7 @@ async def test_create_user_reactivates_soft_deleted_email(db_session: AsyncSessi
             role_id=admin_role_id,
         ),
         _FakeEmailSender(),
+        actor_id=admin_actor.id,
     )
 
     assert reactivated.id == original.id
@@ -200,6 +203,7 @@ async def test_create_user_reactivates_soft_deleted_email(db_session: AsyncSessi
 async def test_create_user_rejects_active_duplicate_email(db_session: AsyncSession):
     await _make_user(db_session, "already-active@example.com")
     role_id = await role_id_for(db_session, UserRole.SALES_REP)
+    actor = await _make_user(db_session, "dup-email-actor@example.com", role=UserRole.ADMIN)
 
     with pytest.raises(EmailAlreadyExistsError):
         await create_user(
@@ -211,6 +215,7 @@ async def test_create_user_rejects_active_duplicate_email(db_session: AsyncSessi
                 role_id=role_id,
             ),
             _FakeEmailSender(),
+            actor_id=actor.id,
         )
 
 
@@ -260,6 +265,21 @@ async def test_change_password_sets_password_changed_at(db_session: AsyncSession
     assert user.password_changed_at is not None
 
 
+async def test_change_password_writes_audit_log(db_session: AsyncSession):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    user = await _make_user_with_password(db_session, "audit-pw-change@example.com", "old-password-123")
+
+    await change_password(db_session, user, "old-password-123", "brand-new-password")
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "users", AuditLog.record_id == user.id, AuditLog.action == "updated")
+    )
+    assert result.scalar_one() is not None
+
+
 async def test_save_avatar_writes_file_and_sets_avatar_url(db_session: AsyncSession):
     user = await _make_user(db_session, "avatar-me@example.com")
 
@@ -277,3 +297,47 @@ async def test_save_avatar_rejects_unsupported_content_type(db_session: AsyncSes
 
     with pytest.raises(UnsupportedImageTypeError):
         await save_avatar(db_session, user, b"whatever", "application/pdf")
+
+
+async def test_create_user_writes_audit_log(db_session, make_user):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+    from app.services.email.sender import EmailSender
+    from app.services.user_service import create_user
+    from app.schemas.user import UserCreate
+    from tests.support.roles import UserRole, role_id_for
+
+    admin = await make_user(email="user-audit-admin@example.com", role=UserRole.ADMIN)
+    role_id = await role_id_for(db_session, UserRole.SALES_REP)
+
+    class _NoopSender(EmailSender):
+        async def send(self, *args, **kwargs):
+            pass
+
+    data = UserCreate(email="user-audit-new@example.com", first_name="New", last_name="User", role_id=role_id)
+    user = await create_user(db_session, data, _NoopSender(), actor_id=admin.id)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "users", AuditLog.record_id == user.id, AuditLog.action == "created")
+    )
+    entry = result.scalar_one()
+    assert entry.actor_id == admin.id
+
+
+async def test_soft_delete_user_writes_audit_log(db_session, make_user):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+    from app.services.user_service import soft_delete_user
+    from tests.support.roles import UserRole
+
+    admin = await make_user(email="user-audit-admin2@example.com", role=UserRole.ADMIN)
+    target = await make_user(email="user-audit-target@example.com")
+    target_id = target.id
+    await soft_delete_user(db_session, target_id, actor_id=admin.id)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "users", AuditLog.record_id == target_id, AuditLog.action == "deactivated")
+    )
+    assert result.scalar_one() is not None

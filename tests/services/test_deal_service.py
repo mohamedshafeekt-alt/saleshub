@@ -970,3 +970,75 @@ async def test_export_deals_contact_is_none_when_no_contacts(
 
     row = next(r for r in rows if r["deal_name"] == deal.deal_name)
     assert row["contact"] is None
+
+
+async def test_create_deal_writes_audit_log(db_session, make_user, make_account, make_deal_stage):
+    from app.models.audit_log import AuditLog
+
+    owner = await make_user(email="deal-audit-owner@example.com")
+    account = await make_account(owner_id=owner.id)
+    stage = await make_deal_stage()
+    data = DealCreate(deal_name="Big Deal", account_id=account.id, owner_id=owner.id, stage_id=stage.id, currency="USD", contact_ids=[])
+    deal = await create_deal(db_session, data, owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "deals", AuditLog.record_id == deal.id, AuditLog.action == "created")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_update_deal_writes_audit_log(db_session, make_user, make_account, make_deal):
+    from app.models.audit_log import AuditLog
+
+    owner = await make_user(email="deal-audit-owner2@example.com")
+    account = await make_account(owner_id=owner.id)
+    deal = await make_deal(account_id=account.id, owner_id=owner.id)
+    await db_session.refresh(owner, attribute_names=["role"])
+    await update_deal(db_session, deal.id, DealUpdate(deal_name="Renamed"), owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "deals", AuditLog.record_id == deal.id, AuditLog.action == "updated")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_update_deal_stage_change_writes_audit_log_with_stage_names(
+    db_session, make_user, make_account, make_deal, make_deal_stage
+):
+    from app.models.audit_log import AuditLog
+
+    owner = await make_user(email="deal-audit-stagechange@example.com")
+    account = await make_account(owner_id=owner.id)
+    from_stage = await make_deal_stage(name="Received Requirements")
+    to_stage = await make_deal_stage(name="Qualified to Buy")
+    deal = await make_deal(account_id=account.id, owner_id=owner.id, stage_id=from_stage.id)
+    await db_session.refresh(owner, attribute_names=["role"])
+
+    await update_deal(db_session, deal.id, DealUpdate(stage_id=to_stage.id), owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "deals", AuditLog.record_id == deal.id, AuditLog.action == "updated")
+    )
+    entry = result.scalar_one()
+    assert "Received Requirements" in entry.description
+    assert "Qualified to Buy" in entry.description
+
+
+async def test_delete_deal_writes_audit_log(db_session, make_user, make_account, make_deal):
+    from app.models.audit_log import AuditLog
+
+    owner = await make_user(email="deal-audit-owner3@example.com")
+    account = await make_account(owner_id=owner.id)
+    deal = await make_deal(account_id=account.id, owner_id=owner.id)
+    deal_id = deal.id
+    await db_session.refresh(owner, attribute_names=["role"])
+    await delete_deal(db_session, deal_id, owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "deals", AuditLog.record_id == deal_id, AuditLog.action == "deleted")
+    )
+    assert result.scalar_one() is not None

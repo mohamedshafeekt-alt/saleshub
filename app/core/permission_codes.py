@@ -17,6 +17,7 @@ DEALS_ACCESS = "deals.access"
 DEALS_VIEW_ALL = "deals.view_all"
 DEALS_DELETE_ANY_ACTIVITY = "deals.delete_any_activity"
 CONTACTS_ACCESS = "contacts.access"
+AUDIT_LOG_VIEW = "audit_log.view"
 
 # A "view_all" permission only widens scope within a module a role can
 # already access -- it's meaningless without the module's base "access"

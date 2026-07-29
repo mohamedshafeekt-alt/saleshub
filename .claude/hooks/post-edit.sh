@@ -1,15 +1,13 @@
 #!/usr/bin/env bash
-# Self-validation loop — runs after every Edit/Write/MultiEdit.
-# Any failure here should be treated as a blocker: fix before moving on.
+# Fast self-validation — runs after every Edit/Write.
+# Lint only: kept fast so it doesn't slow down every single edit.
+# Full typecheck + test suite run once per turn, via stop-check.sh instead.
+# Exit 2 is required (not 1) so Claude Code treats this as a blocking
+# error and feeds the full output back to Claude — see PostToolUse
+# exit-code behavior in the Claude Code hooks reference.
 set -uo pipefail
 
 echo "==> ruff (lint + format check)"
-uv run ruff check . || exit 1
+uv run ruff check . || exit 2
 
-echo "==> mypy (typecheck)"
-uv run mypy app || exit 1
-
-echo "==> pytest (unit + integration tests)"
-uv run pytest -q || exit 1
-
-echo "==> all checks passed"
+echo "==> lint passed"

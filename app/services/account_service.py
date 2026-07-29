@@ -11,9 +11,10 @@ from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.deal import Deal
 from app.models.deal_stage import DealStage
-from app.models.enums import LeadTier
+from app.models.enums import AuditAction, LeadTier
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
+from app.services.audit_service import log_audit
 from app.services.lead_service import get_lead
 
 _EAGER_LOAD_OPTIONS = (
@@ -113,6 +114,10 @@ async def create_account(db: AsyncSession, data: AccountCreate, requester: User)
         await db.flush()
 
     await db.refresh(account, attribute_names=["owner", "contact_accounts", "deals"])
+    await log_audit(
+        db, table_name="accounts", record_id=account.id, action=AuditAction.CREATED,
+        actor_id=requester.id, description=f"Account '{account.company}' created",
+    )
     return account
 
 
@@ -196,6 +201,10 @@ async def update_account(db: AsyncSession, account_id: int, data: AccountUpdate,
         refresh_attrs.append("contact_accounts")
     if refresh_attrs:
         await db.refresh(account, attribute_names=refresh_attrs)
+    await log_audit(
+        db, table_name="accounts", record_id=account.id, action=AuditAction.UPDATED,
+        actor_id=requester.id, description=f"Account '{account.company}' updated",
+    )
     return account
 
 
@@ -225,8 +234,13 @@ async def get_account_overview(
 
 async def delete_account(db: AsyncSession, account_id: int, requester: User) -> None:
     account = await _get_account_or_raise(db, account_id, requester)
+    account_id_, company = account.id, account.company
     await db.delete(account)
     await db.flush()
+    await log_audit(
+        db, table_name="accounts", record_id=account_id_, action=AuditAction.DELETED,
+        actor_id=requester.id, description=f"Account '{company}' deleted",
+    )
 
 
 async def convert_lead_to_account(
@@ -265,4 +279,16 @@ async def convert_lead_to_account(
     lead.is_converted = True
     await db.flush()
     await db.refresh(account, attribute_names=["owner", "contact_accounts", "deals"])
+    await log_audit(
+        db, table_name="accounts", record_id=account.id, action=AuditAction.CREATED,
+        actor_id=requester.id,
+        description=(
+            f"Account '{account.company}' created from lead "
+            f"'{f'{lead.first_name} {lead.last_name}'.strip()}' conversion"
+        ),
+    )
+    await log_audit(
+        db, table_name="leads", record_id=lead.id, action=AuditAction.UPDATED,
+        actor_id=requester.id, description=f"Lead '{lead.company}' converted to account '{account.company}'",
+    )
     return account

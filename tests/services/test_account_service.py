@@ -530,6 +530,35 @@ async def test_convert_lead_to_account_marks_lead_as_converted(db_session: Async
     assert lead.is_converted is True
 
 
+async def test_convert_lead_to_account_writes_audit_log_for_both_lead_and_account(
+    db_session: AsyncSession, make_lead
+):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    owner = await _make_user(db_session, "owner-convert-audit@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="convert-audit@example.com", company="Convert Audit Co")
+
+    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
+    await db_session.flush()
+
+    account_entry = (
+        await db_session.execute(
+            select(AuditLog).where(AuditLog.table_name == "accounts", AuditLog.record_id == account.id)
+        )
+    ).scalar_one()
+    assert account_entry.action == "created"
+
+    lead_entry = (
+        await db_session.execute(
+            select(AuditLog).where(
+                AuditLog.table_name == "leads", AuditLog.record_id == lead.id, AuditLog.action == "updated"
+            )
+        )
+    ).scalar_one()
+    assert "converted" in lead_entry.description.lower()
+
+
 async def test_convert_lead_to_account_raises_for_already_converted_lead(
     db_session: AsyncSession, make_lead
 ):
@@ -599,3 +628,46 @@ async def test_convert_lead_to_account_missing_fields_resolved_by_overrides(
 
     assert account.tier == LeadTier.GOLD
     assert account.owner_id == new_owner.id
+
+
+async def test_create_account_writes_audit_log(db_session, make_user):
+    from app.models.audit_log import AuditLog
+
+    owner = await make_user(email="acct-audit-owner@example.com")
+    data = AccountCreate(company="Acme", domain="acme.com", tier=LeadTier.GOLD, owner_id=owner.id, contacts=[])
+    account = await create_account(db_session, data, owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "accounts", AuditLog.record_id == account.id, AuditLog.action == "created")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_update_account_writes_audit_log(db_session, make_user, make_account):
+    from app.models.audit_log import AuditLog
+
+    owner = await make_user(email="acct-audit-owner2@example.com")
+    account = await make_account(owner_id=owner.id)
+    await update_account(db_session, account.id, AccountUpdate(company="New Name"), owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "accounts", AuditLog.record_id == account.id, AuditLog.action == "updated")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_delete_account_writes_audit_log(db_session, make_user, make_account):
+    from app.models.audit_log import AuditLog
+
+    owner = await make_user(email="acct-audit-owner3@example.com")
+    account = await make_account(owner_id=owner.id)
+    account_id = account.id
+    await delete_account(db_session, account_id, owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "accounts", AuditLog.record_id == account_id, AuditLog.action == "deleted")
+    )
+    assert result.scalar_one() is not None

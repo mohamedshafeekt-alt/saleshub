@@ -24,11 +24,21 @@ response and nothing ever re-raises past it.
 from collections.abc import Awaitable, Callable
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import SQLAlchemyError
 
 from app.core.logging import logger
 from app.schemas.generic_response import ErrorResponse
+
+
+async def validation_error_handler(request: Request, exc: Exception) -> JSONResponse:
+    assert isinstance(exc, RequestValidationError)
+    first = exc.errors()[0]
+    field = ".".join(str(part) for part in first["loc"] if part != "body")
+    message = f"{field}: {first['msg']}" if field else first["msg"]
+    body = ErrorResponse(status_code=422, status="ValidationError", message=message)
+    return JSONResponse(status_code=422, content=body.model_dump())
 
 
 async def sqlalchemy_error_handler(request: Request, exc: Exception) -> JSONResponse:
@@ -44,6 +54,7 @@ async def unhandled_exception_response(exc: Exception) -> JSONResponse:
 
 
 def register_error_handlers(app: FastAPI) -> None:
+    app.add_exception_handler(RequestValidationError, validation_error_handler)
     app.add_exception_handler(SQLAlchemyError, sqlalchemy_error_handler)
 
     @app.middleware("http")

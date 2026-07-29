@@ -25,8 +25,10 @@ uv run mypy app                      # typecheck
 uv run pytest                        # full test suite
 uv run pytest tests/path/to_test.py::test_name   # single test
 ```
-`.claude/hooks/post-edit.sh` runs ruff + mypy + pytest after every Edit/Write —
-a failure there is a blocker per CLAUDE.md rule 6, not something to defer.
+`.claude/hooks/post-edit.sh` runs ruff after every Edit/Write (fast lint check).
+`.claude/hooks/stop-check.sh` runs mypy + the full pytest suite once, before
+Claude ends its turn — a failure in either is a blocker per CLAUDE.md rule 6,
+not something to defer.
 
 ## What this project does
 FastAPI backend for InnoBoon's Sales Prospecting & CRM Platform, Phase 1 scope:
@@ -51,9 +53,14 @@ and Delivery must sign off on that item.
 Explicitly OUT of scope for Phase 1 (do not build these even if the
 original scope PDF mentions them):
 - A full Document Management / Proposals repository (folders, versioning,
-  cross-entity document search). Per-deal document upload (proposals,
-  NDAs, contracts attached directly to a Deal) is in scope and built —
-  see `app/services/deal_document_service.py`.
+  upload/delete UI beyond the per-entity endpoints). Per-deal document
+  upload (proposals, NDAs, contracts attached directly to a Deal) is in
+  scope and built — see `app/services/deal_document_service.py`.
+  Scope change (2026-07-28, requested directly): a read-only combined
+  list across Account and Deal documents (`GET /api/v1/documents`) was
+  pulled forward out of Milestone 3 for the sidebar "Documents" page —
+  see `app/services/document_service.py`. Upload/delete still only exist
+  on the per-account/per-deal endpoints.
 - Staff Augmentation (both resource list and opportunity tracking)
 - Dynamic / templated / stage-gated checklist logic — Phase 1 checklist
   is a flat, static list of items with a status toggle and notes field
@@ -95,12 +102,16 @@ Reference docs live in `docs/`:
    this maps to, ask before building.
 
 2. **Plan Mode first.** Never write code before a plan is proposed and
-   approved, except for trivial one-line fixes.
+   approved, except for trivial one-line fixes. Use `/plan-feature` to
+   produce that plan and get it approved. `/new-endpoint` assumes this
+   already happened — running it *is* the approval to implement, so it
+   goes straight to building rather than pausing again for a plan.
 
 3. **Verify, don't guess, on anything load-bearing.** For current
    FastAPI/SQLAlchemy/Pydantic/Alembic API behavior, library version
-   quirks, or anything time-sensitive, use the Context7 MCP server or
-   web search. Do not answer from stale pretraining for anything that
+   quirks, or anything time-sensitive: use the Context7 MCP server if
+   it's connected (check `/mcp` if unsure), otherwise fall back to web
+   search. Do not answer from stale pretraining for anything that
    affects a real implementation decision.
 
 4. **TDD.** Write a failing test first, then implement, for every
@@ -112,10 +123,12 @@ Reference docs live in `docs/`:
    logic in the name of "keeping it simple" — those are explicit
    requirements, not extras.
 
-6. **Self-validation loop, every change.** Run lint (ruff), typecheck
-   (mypy), and tests (pytest) via `.claude/hooks/post-edit.sh` after
-   every edit. A failure is a blocker — fix it before moving to the
-   next task, don't hand back red code.
+6. **Self-validation loop, every change.** Lint (ruff) runs automatically
+   after every edit via `.claude/hooks/post-edit.sh`. Typecheck (mypy)
+   and the full test suite (pytest) run automatically once, before you
+   stop, via `.claude/hooks/stop-check.sh`. Either is a blocker — fix it
+   before moving to the next task or reporting back, don't hand back
+   red code.
 
 7. **Full ownership.** Implement the feature, run the tests yourself,
    fix failures yourself. Only return control to me for manual
@@ -139,7 +152,3 @@ Reference docs live in `docs/`:
 11. **Track it in README.md.** After every completed feature, add a
     line under "Implemented" in `README.md`. This is how progress
     against the Week 1 / Week 2 / Week 3 milestones gets tracked.
-
-## Current milestone
-Week 1 (per kickoff email): Login, RBAC, Lead Management, Navigation.
-Demo target: login flow + full lead CRUD/filter/search working.

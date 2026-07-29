@@ -62,7 +62,7 @@ async def upsert_lead_route(
 ) -> LeadRead:
     try:
         if data.id is None:
-            lead = await create_lead(db, data, email_sender)
+            lead = await create_lead(db, data, email_sender, requester=current_user)
             response.status_code = status.HTTP_201_CREATED
         else:
             lead = await update_lead(db, data.id, data, requester=current_user)

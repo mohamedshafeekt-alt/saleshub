@@ -6,11 +6,13 @@ or update a contact together with its account link and is_primary flag."""
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.deps import get_current_user
 from app.core.permission_codes import CONTACTS_ACCESS
 from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
+from app.models.user import User
 from app.models.enums import LeadTier
 from app.schemas.contact import (
     ContactCreate,
@@ -77,10 +79,11 @@ def _to_contact_overview(
 @router.post("", response_model=ContactRead, status_code=status.HTTP_201_CREATED)
 async def create_contact_route(
     data: ContactCreate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactRead:
     try:
-        contact = await create_contact(db, data)
+        contact = await create_contact(db, data, requester=current_user)
     except DuplicateContactEmailError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -160,10 +163,11 @@ async def get_contact_route(
 async def update_contact_route(
     contact_id: int,
     data: ContactUpdate,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactRead:
     try:
-        contact = await update_contact(db, contact_id, data)
+        contact = await update_contact(db, contact_id, data, requester=current_user)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except DuplicateContactEmailError as exc:
@@ -176,10 +180,11 @@ async def update_contact_route(
 @router.delete("/{contact_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_contact_route(
     contact_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     try:
-        await delete_contact(db, contact_id)
+        await delete_contact(db, contact_id, requester=current_user)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 

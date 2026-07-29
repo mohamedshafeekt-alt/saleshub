@@ -11,6 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
+from app.models.enums import AuditAction
 from app.models.user import User
 from app.schemas.contact_account import AccountContactUpsert
 from app.services.account_service import (
@@ -18,6 +19,7 @@ from app.services.account_service import (
     account_has_primary_contact,
     get_account,
 )
+from app.services.audit_service import log_audit
 from app.services.contact_service import DuplicateContactEmailError
 
 
@@ -58,6 +60,12 @@ async def create_account_contact(
     contact_account = ContactAccount(contact_id=contact.id, account_id=account_id, is_primary=is_primary)
     db.add(contact_account)
     await db.flush()
+
+    name = f"{contact.first_name} {contact.last_name or ''}".strip()
+    await log_audit(
+        db, table_name="contacts", record_id=contact.id, action=AuditAction.CREATED,
+        actor_id=requester.id, description=f"Contact '{name}' created",
+    )
 
     return contact, contact_account
 
@@ -108,6 +116,13 @@ async def update_account_contact(
         contact_account.is_primary = is_primary
 
     await db.flush()
+
+    name = f"{contact.first_name} {contact.last_name or ''}".strip()
+    await log_audit(
+        db, table_name="contacts", record_id=contact.id, action=AuditAction.UPDATED,
+        actor_id=requester.id, description=f"Contact '{name}' updated",
+    )
+
     return contact, contact_account
 
 
