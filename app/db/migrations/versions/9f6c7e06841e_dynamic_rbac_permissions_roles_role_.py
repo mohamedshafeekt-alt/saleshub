@@ -10,12 +10,22 @@ from typing import Sequence, Union
 from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
+from sqlalchemy import table, column
 
 # revision identifiers, used by Alembic.
 revision: str = '9f6c7e06841e'
 down_revision: Union[str, Sequence[str], None] = 'b7f3a91c2e04'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
+
+# Old UserRole enum value -> new starter role name (app.core.rbac_seed.STARTER_ROLES),
+# for backfilling users created before this migration (role -> role_id).
+_ROLE_NAME_BY_OLD_ENUM = {
+    "admin": "Admin",
+    "sales_manager": "Sales Manager",
+    "sales_rep": "Sales Rep",
+    "delivery_sme": "Delivery SME",
+}
 
 
 def upgrade() -> None:
@@ -52,10 +62,64 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['role_id'], ['roles.id'], ),
     sa.PrimaryKeyConstraint('role_id', 'permission_id')
     )
-    op.add_column('users', sa.Column('role_id', sa.Integer(), nullable=False))
+    # ### end Alembic commands ###
+
+    # Seed the permission catalog + starter roles right away (mirroring
+    # app.core.rbac_seed.seed_permissions_and_roles's data exactly -- that
+    # function only INSERTs rows missing by code/name, so seeding here first
+    # doesn't cause duplicates, it just makes the seeder's later run a no-op
+    # for this data). Needed now, before the old `role` column is dropped
+    # below, so existing users' role_id can be backfilled from it.
+    from app.core.rbac_seed import _PERMISSIONS, STARTER_ROLES
+
+    permissions_table = table(
+        "permissions",
+        column("code", sa.String),
+        column("label", sa.String),
+        column("description", sa.String),
+        column("module", sa.String),
+    )
+    op.bulk_insert(
+        permissions_table,
+        [
+            {"code": code, "label": label, "description": description, "module": module}
+            for code, label, description, module in _PERMISSIONS
+        ],
+    )
+
+    roles_table = table("roles", column("name", sa.String), column("description", sa.String))
+    op.bulk_insert(
+        roles_table,
+        [{"name": name, "description": f"Starter role: {name}"} for name in STARTER_ROLES],
+    )
+
+    role_permissions_conn = op.get_bind()
+    for role_name, codes in STARTER_ROLES.items():
+        role_permissions_conn.execute(
+            sa.text(
+                """
+                INSERT INTO role_permissions (role_id, permission_id)
+                SELECT r.id, p.id FROM roles r, permissions p
+                WHERE r.name = :role_name AND p.code = ANY(:codes)
+                """
+            ),
+            {"role_name": role_name, "codes": codes},
+        )
+
+    # role_id starts nullable so existing rows can be backfilled from the
+    # old `role` enum column before it's dropped and role_id becomes
+    # required.
+    op.add_column('users', sa.Column('role_id', sa.Integer(), nullable=True))
+    for old_value, role_name in _ROLE_NAME_BY_OLD_ENUM.items():
+        role_permissions_conn.execute(
+            sa.text(
+                "UPDATE users SET role_id = (SELECT id FROM roles WHERE name = :role_name) WHERE role = :old_value"
+            ),
+            {"role_name": role_name, "old_value": old_value},
+        )
+    op.alter_column('users', 'role_id', nullable=False)
     op.create_foreign_key('fk_users_role_id_roles', 'users', 'roles', ['role_id'], ['id'])
     op.drop_column('users', 'role')
-    # ### end Alembic commands ###
 
 
 def downgrade() -> None:

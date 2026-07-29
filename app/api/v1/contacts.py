@@ -3,7 +3,9 @@ no single owning account; see contact_service.py's module docstring). Use
 POST/PUT /accounts/{account_id}/contacts (app/api/v1/accounts.py) to create
 or update a contact together with its account link and is_primary flag."""
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from typing import Literal
+
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
@@ -21,8 +23,14 @@ from app.schemas.contact import (
     ContactRead,
     ContactUpdate,
 )
+from app.schemas.contact_import import ContactImportResult
 from app.schemas.deal import DealRead
 from app.schemas.generic_response import Page
+from app.services.contact_import_service import (
+    ContactImportFileError,
+    build_contact_import_template,
+    import_contacts,
+)
 from app.services.contact_service import (
     ContactNotFoundError,
     DuplicateContactEmailError,
@@ -34,6 +42,9 @@ from app.services.contact_service import (
     update_contact,
 )
 from app.services.deal_service import list_deals_for_contact
+
+_XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+_CSV_MEDIA_TYPE = "text/csv"
 
 router = APIRouter(prefix="/contacts", tags=["contacts"])
 
@@ -118,6 +129,36 @@ async def list_contacts_route(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get("/import/template")
+async def download_contact_import_template_route(
+    file_format: Literal["xlsx", "csv"] = Query("xlsx", alias="format"),
+) -> Response:
+    content = build_contact_import_template(file_format)
+    media_type = _XLSX_MEDIA_TYPE if file_format == "xlsx" else _CSV_MEDIA_TYPE
+    return Response(
+        content=content,
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="contact_import_template.{file_format}"'},
+    )
+
+
+@router.post("/import", response_model=ContactImportResult)
+async def import_contacts_route(
+    file: UploadFile,
+    db: AsyncSession = Depends(get_db),
+) -> ContactImportResult:
+    if not file.filename or not file.filename.lower().endswith((".xlsx", ".csv")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be .xlsx or .csv")
+
+    content = await file.read()
+    try:
+        # import_contacts commits each successful row itself (see its module
+        # docstring), so there's nothing left pending to commit here.
+        return await import_contacts(db, content, file.filename)
+    except ContactImportFileError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/{contact_id}/overview", response_model=ContactOverviewRead)
