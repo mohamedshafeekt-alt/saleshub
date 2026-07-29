@@ -40,12 +40,17 @@ class DealUpdate(BaseModel):
     note: str | None = None
 
 
+class DealContactRead(BaseModel):
+    id: int
+    name: str
+
+
 class DealRead(ORMBase):
 
     id: int
     deal_name: str
     account_id: int
-    contact_ids: list[int] = []
+    contacts: list[DealContactRead] = []
     value: float | None
     currency: str
     expected_close_date: date | None

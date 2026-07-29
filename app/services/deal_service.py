@@ -76,23 +76,34 @@ async def _set_deal_contacts(db: AsyncSession, deal_id: int, contact_ids: list[i
     await db.flush()
 
 
-async def get_deal_contact_ids(db: AsyncSession, deal_id: int) -> list[int]:
-    result = await db.execute(select(DealContact.contact_id).where(DealContact.deal_id == deal_id))
-    return list(result.scalars().all())
+_CONTACT_NAME = func.trim(
+    func.concat(func.coalesce(Contact.first_name, ""), " ", func.coalesce(Contact.last_name, ""))
+)
+
+
+async def get_deal_contact_ids(db: AsyncSession, deal_id: int) -> list[tuple[int, str]]:
+    result = await db.execute(
+        select(DealContact.contact_id, _CONTACT_NAME)
+        .join(Contact, Contact.id == DealContact.contact_id)
+        .where(DealContact.deal_id == deal_id)
+    )
+    return [(cid, name) for cid, name in result.all()]
 
 
 async def get_deal_contact_ids_by_deal(
     db: AsyncSession, deal_ids: list[int]
-) -> dict[int, list[int]]:
-    """Batched contact_ids lookup for a list of deal ids, to avoid N+1 in list/board views."""
+) -> dict[int, list[tuple[int, str]]]:
+    """Batched contact id+name lookup for a list of deal ids, to avoid N+1 in list/board views."""
     if not deal_ids:
         return {}
     result = await db.execute(
-        select(DealContact.deal_id, DealContact.contact_id).where(DealContact.deal_id.in_(deal_ids))
+        select(DealContact.deal_id, DealContact.contact_id, _CONTACT_NAME)
+        .join(Contact, Contact.id == DealContact.contact_id)
+        .where(DealContact.deal_id.in_(deal_ids))
     )
-    by_deal: dict[int, list[int]] = {deal_id: [] for deal_id in deal_ids}
-    for deal_id, contact_id in result.all():
-        by_deal[deal_id].append(contact_id)
+    by_deal: dict[int, list[tuple[int, str]]] = {deal_id: [] for deal_id in deal_ids}
+    for deal_id, contact_id, name in result.all():
+        by_deal[deal_id].append((contact_id, name))
     return by_deal
 
 
@@ -410,27 +421,13 @@ async def export_deals(
 
     rows = (await db.execute(query)).all()
     deal_ids = [row[0] for row in rows]
-    contact_ids_by_deal = await get_deal_contact_ids_by_deal(db, deal_ids)
-
-    all_contact_ids = {cid for ids in contact_ids_by_deal.values() for cid in ids}
-    contact_names: dict[int, str] = {}
-    if all_contact_ids:
-        contact_name = func.trim(
-            func.concat(func.coalesce(Contact.first_name, ""), " ", func.coalesce(Contact.last_name, ""))
-        )
-        contact_rows = (
-            await db.execute(select(Contact.id, contact_name).where(Contact.id.in_(all_contact_ids)))
-        ).all()
-        contact_names = {row[0]: row[1] for row in contact_rows}
+    contacts_by_deal = await get_deal_contact_ids_by_deal(db, deal_ids)
 
     return [
         {
             "deal_name": row[1],
             "account": row[2],
-            "contact": ", ".join(
-                contact_names[cid] for cid in contact_ids_by_deal.get(row[0], []) if cid in contact_names
-            )
-            or None,
+            "contact": ", ".join(name for _cid, name in contacts_by_deal.get(row[0], [])) or None,
             "value": row[3],
             "currency": row[4],
             "stage": row[5],
