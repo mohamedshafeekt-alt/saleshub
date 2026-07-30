@@ -16,6 +16,7 @@ from app.services.user_service import (
     change_password,
     create_user,
     list_users,
+    remove_avatar,
     save_avatar,
     soft_delete_user,
     update_profile,
@@ -139,13 +140,14 @@ async def test_list_users_filters_by_status_deactivated(db_session: AsyncSession
     assert active.email not in emails
 
 
-async def test_soft_delete_user_sets_is_delete_true(db_session: AsyncSession):
+async def test_soft_delete_user_sets_is_active_false(db_session: AsyncSession):
     user = await _make_user(db_session, "soft-delete-me@example.com")
 
     await soft_delete_user(db_session, user.id, actor_id=user.id)
 
     await db_session.refresh(user)
-    assert user.is_delete is True
+    assert user.is_active is False
+    assert user.is_delete is False
 
 
 async def test_soft_delete_user_missing_id_raises_not_found(db_session: AsyncSession):
@@ -162,42 +164,36 @@ async def test_soft_delete_user_already_deleted_raises_not_found(db_session: Asy
         await soft_delete_user(db_session, user.id, actor_id=user.id)
 
 
-async def test_list_users_excludes_soft_deleted(db_session: AsyncSession):
+async def test_list_users_includes_deactivated_by_default(db_session: AsyncSession):
     kept = await _make_user(db_session, "kept@example.com")
-    deleted = await _make_user(db_session, "deleted-from-list@example.com")
-    await soft_delete_user(db_session, deleted.id, actor_id=kept.id)
+    deactivated = await _make_user(db_session, "deactivated-from-list@example.com")
+    await soft_delete_user(db_session, deactivated.id, actor_id=kept.id)
 
     users = await list_users(db_session)
 
     emails = {u.email for u in users}
     assert kept.email in emails
-    assert deleted.email not in emails
+    assert deactivated.email in emails
 
 
-async def test_create_user_reactivates_soft_deleted_email(db_session: AsyncSession):
+async def test_create_user_rejects_deactivated_duplicate_email(db_session: AsyncSession):
     original = await _make_user(db_session, "reactivate-me@example.com", role=UserRole.SALES_REP)
     admin_actor = await _make_user(db_session, "reactivate-admin-actor@example.com", role=UserRole.ADMIN)
     await soft_delete_user(db_session, original.id, actor_id=admin_actor.id)
     admin_role_id = await role_id_for(db_session, UserRole.ADMIN)
 
-    reactivated = await create_user(
-        db_session,
-        UserCreate(
-            email="reactivate-me@example.com",
-            first_name="New First",
-            last_name="New Last",
-            role_id=admin_role_id,
-        ),
-        _FakeEmailSender(),
-        actor_id=admin_actor.id,
-    )
-
-    assert reactivated.id == original.id
-    assert reactivated.is_delete is False
-    assert reactivated.is_active is True
-    assert reactivated.first_name == "New First"
-    assert reactivated.last_name == "New Last"
-    assert reactivated.role_id == admin_role_id
+    with pytest.raises(EmailAlreadyExistsError):
+        await create_user(
+            db_session,
+            UserCreate(
+                email="reactivate-me@example.com",
+                first_name="New First",
+                last_name="New Last",
+                role_id=admin_role_id,
+            ),
+            _FakeEmailSender(),
+            actor_id=admin_actor.id,
+        )
 
 
 async def test_create_user_rejects_active_duplicate_email(db_session: AsyncSession):
@@ -297,6 +293,26 @@ async def test_save_avatar_rejects_unsupported_content_type(db_session: AsyncSes
 
     with pytest.raises(UnsupportedImageTypeError):
         await save_avatar(db_session, user, b"whatever", "application/pdf")
+
+
+async def test_remove_avatar_deletes_file_and_clears_avatar_url(db_session: AsyncSession):
+    user = await _make_user(db_session, "avatar-remove@example.com")
+    await save_avatar(db_session, user, b"fake-png-bytes", "image/png")
+    avatar_path = Path(f"media/avatars/{user.id}.png")
+    assert avatar_path.exists()
+
+    await remove_avatar(db_session, user)
+
+    assert user.avatar_url is None
+    assert not avatar_path.exists()
+
+
+async def test_remove_avatar_without_existing_avatar_is_a_noop(db_session: AsyncSession):
+    user = await _make_user(db_session, "avatar-remove-noop@example.com")
+
+    await remove_avatar(db_session, user)
+
+    assert user.avatar_url is None
 
 
 async def test_create_user_writes_audit_log(db_session, make_user):

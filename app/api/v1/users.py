@@ -21,6 +21,7 @@ from app.services.user_service import (
     change_password,
     create_user,
     list_users,
+    remove_avatar,
     save_avatar,
     soft_delete_user,
     update_profile,
@@ -94,6 +95,16 @@ async def upload_my_avatar(
     except UnsupportedImageTypeError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    await db.commit()
+    return UserRead.model_validate(current_user)
+
+
+@router.delete("/me/avatar", response_model=UserRead)
+async def delete_my_avatar(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRead:
+    await remove_avatar(db, current_user)
     await db.commit()
     return UserRead.model_validate(current_user)
 

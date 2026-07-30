@@ -16,6 +16,7 @@ from app.models.enums import DealActivityType, LeadTier
 from app.models.user import User
 from app.schemas.deal import (
     DealBoardColumn,
+    DealContactRead,
     DealCreate,
     DealRead,
     DealsListResponse,
@@ -75,8 +76,12 @@ _XLSX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.spreadsheetml.
 router = APIRouter(prefix="/deals", tags=["deals"])
 
 
-def _deal_read(deal: object, contact_ids: list[int]) -> DealRead:
-    return DealRead.model_validate(deal).model_copy(update={"contact_ids": contact_ids})
+def _deal_read(deal: object, contact_ids: list[tuple[int, str, str, str | None]]) -> DealRead:
+    contacts = [
+        DealContactRead(id=cid, name=name, email=email, phone=phone)
+        for cid, name, email, phone in contact_ids
+    ]
+    return DealRead.model_validate(deal).model_copy(update={"contacts": contacts})
 
 
 @router.post("", response_model=DealRead, status_code=status.HTTP_201_CREATED)
@@ -237,7 +242,7 @@ async def get_deal_route(
         "ID": deal_read.id,
         "Deal Name": deal_read.deal_name,
         "Account ID": deal_read.account_id,
-        "Contact IDs": ", ".join(str(cid) for cid in deal_read.contact_ids),
+        "Contacts": ", ".join(contact.name for contact in deal_read.contacts),
         "Value": deal_read.value,
         "Currency": deal_read.currency,
         "Expected Close Date": deal_read.expected_close_date,

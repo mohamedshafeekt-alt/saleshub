@@ -127,19 +127,20 @@ async def list_users(
 
 
 async def soft_delete_user(db: AsyncSession, user_id: int, actor_id: int) -> None:
-    result = await db.execute(select(User).where(User.id == user_id, User.is_delete.is_(False)))
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.is_delete.is_(False), User.is_active.is_(True))
+    )
     user = result.scalar_one_or_none()
     if user is None:
         raise UserNotFoundError(f"User not found: {user_id}")
 
     email = user.email
-    user.is_delete = True
+    user.is_active = False
     await db.flush()
     await log_audit(
         db, table_name="users", record_id=user_id, action=AuditAction.DEACTIVATED,
         actor_id=actor_id, description=f"User '{email}' deactivated",
     )
-
 
 class IncorrectPasswordError(Exception):
     """Raised when current_password doesn't match the user's stored hash."""
@@ -189,6 +190,13 @@ async def save_avatar(db: AsyncSession, user: User, content: bytes, content_type
     user.avatar_url = avatar_url
     await db.flush()
     return user.avatar_url
+
+
+async def remove_avatar(db: AsyncSession, user: User) -> None:
+    if user.avatar_url is not None:
+        _avatar_upload_service.delete(user.avatar_url)
+    user.avatar_url = None
+    await db.flush()
 
 
 async def authenticate_user(db: AsyncSession, email: str, password: str) -> User | None:
