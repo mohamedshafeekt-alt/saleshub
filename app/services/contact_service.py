@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.account import Account
+from app.models.audit_log import AuditLog
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.deal_contact import DealContact
@@ -130,12 +131,14 @@ def _primary_account_link(contact: Contact) -> ContactAccount | None:
 
 async def get_contact_overview(
     db: AsyncSession, contact_id: int
-) -> tuple[Contact, ContactAccount | None, int]:
+) -> tuple[Contact, ContactAccount | None, int, str | None]:
     """Contact fields + its representative Account link (see
-    _primary_account_link) + how many Deals it's linked to via DealContact.
-    tags/about/last_activity/task_count/log_count have no backing model yet
-    -- the route fills those with null, same pattern as
-    AccountOverviewRead.last_activity/next_step/total_arr."""
+    _primary_account_link) + how many Deals it's linked to via DealContact +
+    the creator's display name (from the audit log's CREATED row for this
+    contact, since Contact has no created_by column of its own). null if no
+    such audit row exists. tags/about/last_activity/task_count/log_count
+    have no backing model yet -- the route fills those with null, same
+    pattern as AccountOverviewRead.last_activity/next_step/total_arr."""
     result = await db.execute(
         select(Contact).where(Contact.id == contact_id).options(*_OVERVIEW_EAGER_LOAD)
     )
@@ -148,7 +151,26 @@ async def get_contact_overview(
         await db.execute(select(func.count(DealContact.id)).where(DealContact.contact_id == contact_id))
     ).scalar_one()
 
-    return contact, account_link, deal_count
+    created_by_log = (
+        await db.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.table_name == "contacts",
+                AuditLog.record_id == contact_id,
+                AuditLog.action == AuditAction.CREATED.value,
+            )
+            .options(selectinload(AuditLog.actor))
+            .order_by(AuditLog.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    created_by_name = (
+        " ".join(filter(None, [created_by_log.actor.first_name, created_by_log.actor.last_name]))
+        if created_by_log
+        else None
+    )
+
+    return contact, account_link, deal_count, created_by_name
 
 
 async def list_contacts(

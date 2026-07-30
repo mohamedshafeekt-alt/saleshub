@@ -68,7 +68,7 @@ def _to_contact_list_item(contact: Contact, account_link: ContactAccount | None)
 
 
 def _to_contact_overview(
-    contact: Contact, account_link: ContactAccount | None, deal_count: int
+    contact: Contact, account_link: ContactAccount | None, deal_count: int, created_by_name: str | None
 ) -> ContactOverviewRead:
     account = account_link.account if account_link else None
     return ContactOverviewRead(
@@ -87,6 +87,8 @@ def _to_contact_overview(
         owner_name=account.owner_name if account else None,
         tier=account.tier if account else None,
         deal_count=deal_count,
+        created_at=contact.created_at,
+        created_by_name=created_by_name,
     )
 
 
@@ -172,6 +174,7 @@ async def download_contact_import_template_route(
 @router.post("/import", response_model=ContactImportResult)
 async def import_contacts_route(
     file: UploadFile,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactImportResult:
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".csv")):
@@ -181,7 +184,7 @@ async def import_contacts_route(
     try:
         # import_contacts commits each successful row itself (see its module
         # docstring), so there's nothing left pending to commit here.
-        return await import_contacts(db, content, file.filename)
+        return await import_contacts(db, content, file.filename, requester=current_user)
     except ContactImportFileError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -192,11 +195,11 @@ async def get_contact_overview_route(
     db: AsyncSession = Depends(get_db),
 ) -> ContactOverviewRead:
     try:
-        contact, account_link, deal_count = await get_contact_overview(db, contact_id)
+        contact, account_link, deal_count, created_by_name = await get_contact_overview(db, contact_id)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    return _to_contact_overview(contact, account_link, deal_count)
+    return _to_contact_overview(contact, account_link, deal_count, created_by_name)
 
 
 @router.get("/{contact_id}/deals", response_model=list[DealRead])

@@ -183,11 +183,12 @@ async def test_get_contact_overview_with_no_linked_accounts_returns_null_derived
         db_session, ContactCreate(first_name="Unlinked", email="unlinked@example.com"), requester=actor
     )
 
-    contact, account_link, deal_count = await get_contact_overview(db_session, created.id)
+    contact, account_link, deal_count, created_by_name = await get_contact_overview(db_session, created.id)
 
     assert contact.id == created.id
     assert account_link is None
     assert deal_count == 0
+    assert created_by_name == "Test"
 
 
 async def test_get_contact_overview_derives_owner_tier_account_from_single_link(
@@ -197,13 +198,14 @@ async def test_get_contact_overview_derives_owner_tier_account_from_single_link(
     account = await make_account(owner_id=owner.id, company="Nexbridge Tech", tier=LeadTier.GOLD)
     created = await make_contact(account_id=account.id, first_name="Sarah", is_primary=True)
 
-    contact, account_link, _deal_count = await get_contact_overview(db_session, created.id)
+    contact, account_link, _deal_count, created_by_name = await get_contact_overview(db_session, created.id)
 
     assert account_link is not None
     assert account_link.is_primary is True
     assert account_link.account.id == account.id
     assert account_link.account.company == "Nexbridge Tech"
     assert account_link.account.tier == LeadTier.GOLD
+    assert created_by_name is None  # made via make_contact, bypasses create_contact -- no audit row
     assert account_link.account.owner_id == owner.id
     assert account_link.account.owner_name == "Karthick"
 
@@ -221,7 +223,7 @@ async def test_get_contact_overview_prefers_oldest_primary_link_when_multiple_ac
     db_session.add(ContactAccount(contact_id=contact.id, account_id=account_c.id, is_primary=True))
     await db_session.flush()
 
-    _contact, account_link, _deal_count = await get_contact_overview(db_session, contact.id)
+    _contact, account_link, _deal_count, _created_by_name = await get_contact_overview(db_session, contact.id)
 
     assert account_link is not None
     assert account_link.account.company == "Account B"  # oldest is_primary=True link
@@ -239,7 +241,7 @@ async def test_get_contact_overview_falls_back_to_oldest_link_when_none_primary(
     db_session.add(ContactAccount(contact_id=contact.id, account_id=account_b.id, is_primary=False))
     await db_session.flush()
 
-    _contact, account_link, _deal_count = await get_contact_overview(db_session, contact.id)
+    _contact, account_link, _deal_count, _created_by_name = await get_contact_overview(db_session, contact.id)
 
     assert account_link is not None
     assert account_link.account.company == "First Linked Co"  # oldest link overall
@@ -258,7 +260,7 @@ async def test_get_contact_overview_deal_count_reflects_linked_deals(
         account_id=account.id, owner_id=owner.id, deal_name="Other's Deal", contact_ids=[other_contact.id]
     )
 
-    _contact, _account_link, deal_count = await get_contact_overview(db_session, contact.id)
+    _contact, _account_link, deal_count, _created_by_name = await get_contact_overview(db_session, contact.id)
 
     assert deal_count == 2
 

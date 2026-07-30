@@ -27,6 +27,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
+from app.models.user import User
 from app.schemas.contact import ContactCreate
 from app.schemas.contact_import import ContactImportResult, ContactImportRowError
 from app.services.contact_service import DuplicateContactEmailError, create_contact
@@ -120,7 +121,9 @@ def _parse_rows(file_bytes: bytes, filename: str) -> list[dict[str, str | None]]
         raise ContactImportFileError(f"Could not read uploaded file: {exc}") from exc
 
 
-async def import_contacts(db: AsyncSession, file_bytes: bytes, filename: str) -> ContactImportResult:
+async def import_contacts(
+    db: AsyncSession, file_bytes: bytes, filename: str, requester: User
+) -> ContactImportResult:
     rows = _parse_rows(file_bytes, filename)
 
     row_emails = {row["email"].lower() for row in rows if row["email"]}
@@ -161,7 +164,7 @@ async def import_contacts(db: AsyncSession, file_bytes: bytes, filename: str) ->
             continue
 
         try:
-            await create_contact(db, data)
+            await create_contact(db, data, requester=requester)
         except (DuplicateContactEmailError, IntegrityError) as exc:
             errors.append(ContactImportRowError(row=index, error=str(exc)))
             continue
