@@ -166,7 +166,7 @@ async def export_leads(
 ) -> list[dict[str, Any]]:
     """All leads matching the requester's role-scoping (same rule as
     list_leads). No pagination."""
-    filters = []
+    filters: list[ColumnElement[bool]] = [Lead.is_converted.is_(False)]
     if LEADS_VIEW_ALL not in requester.permission_codes:
         filters.append(or_(Lead.owner_id == requester.id, Lead.owner_id.is_(None)))
     if source is not None:

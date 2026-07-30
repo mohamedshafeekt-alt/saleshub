@@ -26,7 +26,7 @@ from app.services.account_service import (
 )
 from app.services.email.sender import EmailSender
 from app.services.lead_import_service import LeadImportFileError, build_lead_import_template, import_leads
-from app.services.export_service import rows_to_xlsx
+from app.services.export_service import field_value_sheet, rows_to_xlsx, sheets_to_xlsx
 from app.services.lead_activity_service import (
     LeadActivityNotFoundError,
     create_lead_activity,
@@ -86,9 +86,34 @@ async def list_leads_route(
     search: str | None = Query(None),
     limit: int = Query(20),
     offset: int = Query(0),
+    to_export: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> Page[LeadRead]:
+) -> Page[LeadRead] | StreamingResponse:
+    if to_export:
+        rows = await export_leads(db, requester=current_user, source=source, status=lead_status, search=search)
+        buffer = rows_to_xlsx(
+            ["Name", "Email", "Phone", "Company", "Source", "Status", "Owner"],
+            [
+                [
+                    row["name"],
+                    row["email"],
+                    row["phone"],
+                    row["company"],
+                    row["source"],
+                    row["status"],
+                    row["owner"],
+                ]
+                for row in rows
+            ],
+            sheet_name="Leads",
+        )
+        return StreamingResponse(
+            buffer,
+            media_type=_XLSX_MEDIA_TYPE,
+            headers={"Content-Disposition": "attachment; filename=leads.xlsx"},
+        )
+
     leads, total = await list_leads(
         db,
         requester=current_user,
@@ -135,47 +160,14 @@ async def import_leads_route(
     except LeadImportFileError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
-    
-@router.get("/export")
-async def export_leads_route(
-    source: LeadSource | None = Query(None),
-    lead_status: LeadStatus | None = Query(None, alias="status"),
-    search: str | None = Query(None),
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> StreamingResponse:
-    rows = await export_leads(db, requester=current_user, source=source, status=lead_status, search=search)
-
-    buffer = rows_to_xlsx(
-        ["Name", "Email", "Phone", "Company", "Source", "Status", "Owner"],
-        [
-            [
-                row["name"],
-                row["email"],
-                row["phone"],
-                row["company"],
-                row["source"],
-                row["status"],
-                row["owner"],
-            ]
-            for row in rows
-        ],
-        sheet_name="Leads",
-    )
-
-    return StreamingResponse(
-        buffer,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": "attachment; filename=leads.xlsx"},
-    )
-
 
 @router.get("/{lead_id}", response_model=LeadDetailRead)
 async def get_lead_route(
     lead_id: int,
+    to_export: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
-) -> LeadDetailRead:
+) -> LeadDetailRead | StreamingResponse:
     try:
         lead = await get_lead_detail(db, lead_id, requester=current_user)
     except LeadNotFoundError as exc:
@@ -183,7 +175,46 @@ async def get_lead_route(
     except LeadAccessForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
-    return LeadDetailRead.model_validate(lead)
+    detail = LeadDetailRead.model_validate(lead)
+    if not to_export:
+        return detail
+
+    lead_fields = {
+        "ID": detail.id,
+        "First Name": detail.first_name,
+        "Last Name": detail.last_name,
+        "Company": detail.company,
+        "Domain": detail.domain,
+        "Job Title": detail.job_title,
+        "Email": detail.email,
+        "Phone": detail.phone,
+        "LinkedIn URL": detail.linkedin_url,
+        "Source": detail.source.value,
+        "Status": detail.status.value,
+        "Owner": detail.owner_name,
+        "Next Follow Up Date": detail.next_follow_up_date,
+        "Follow Up Note": detail.follow_up_note,
+        "Is Converted": detail.is_converted,
+        "Created At": detail.created_at,
+        "Updated At": detail.updated_at,
+        "Activity Count": detail.activity_count,
+        "Last Contact At": detail.last_contact_at,
+    }
+    activity_rows = [
+        [activity.type.value, activity.note, activity.created_by_name, activity.created_at]
+        for activity in detail.activities
+    ]
+    buffer = sheets_to_xlsx(
+        [
+            field_value_sheet("Lead", lead_fields),
+            ("Activities", ["Type", "Note", "Created By", "Created At"], activity_rows),
+        ]
+    )
+    return StreamingResponse(
+        buffer,
+        media_type=_XLSX_MEDIA_TYPE,
+        headers={"Content-Disposition": f'attachment; filename="lead_{lead_id}.xlsx"'},
+    )
 
 
 @router.delete("/{lead_id}", status_code=status.HTTP_204_NO_CONTENT)

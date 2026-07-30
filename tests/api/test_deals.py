@@ -601,10 +601,10 @@ async def test_stage_history_returns_403_for_non_owning_sales_rep(
     assert response.status_code == 403
 
 
-# --- GET /deals/export --------------------------------------------------------
+# --- GET /deals?to_export=true --------------------------------------------
 
 
-async def test_export_deals_returns_valid_xlsx_with_expected_rows(
+async def test_list_deals_to_export_returns_valid_xlsx_with_expected_rows(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal
 ):
     owner = await make_user(email="rep-export-deal@example.com", role=UserRole.SALES_REP)
@@ -612,7 +612,7 @@ async def test_export_deals_returns_valid_xlsx_with_expected_rows(
     await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Export Xlsx Deal", value=42.0)
     headers = auth_headers(owner)
 
-    response = await client.get(f"{DEALS_URL}/export", headers=headers)
+    response = await client.get(DEALS_URL, params={"to_export": "true"}, headers=headers)
 
     assert response.status_code == 200
     assert (
@@ -642,7 +642,15 @@ async def test_export_deals_returns_valid_xlsx_with_expected_rows(
     assert any(row[0] == "Export Xlsx Deal" for row in data_rows)
 
 
-async def test_export_deals_scopes_to_requester_for_non_view_all_role(
+async def test_deals_export_route_no_longer_exists(client: AsyncClient, make_user, auth_headers):
+    """"/export" now falls through to GET /deals/{deal_id} and fails int
+    path-param validation (422), since the dedicated /export route is gone."""
+    owner = await make_user(email="rep-old-export-deal-route@example.com", role=UserRole.SALES_REP)
+    response = await client.get(f"{DEALS_URL}/export", headers=auth_headers(owner))
+    assert response.status_code == 422
+
+
+async def test_list_deals_to_export_scopes_to_requester_for_non_view_all_role(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal
 ):
     rep_a = await make_user(email="rep-a-export-xlsx@example.com", role=UserRole.SALES_REP)
@@ -652,7 +660,7 @@ async def test_export_deals_scopes_to_requester_for_non_view_all_role(
     await make_deal(account_id=account.id, owner_id=rep_b.id, deal_name="Other Export Xlsx Deal")
     headers = auth_headers(rep_a)
 
-    response = await client.get(f"{DEALS_URL}/export", headers=headers)
+    response = await client.get(DEALS_URL, params={"to_export": "true"}, headers=headers)
 
     import io
 
@@ -661,6 +669,32 @@ async def test_export_deals_scopes_to_requester_for_non_view_all_role(
     data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
     names = {row[0] for row in data_rows}
     assert names == {"Own Export Xlsx Deal"}
+
+
+async def test_get_deal_to_export_returns_deal_and_stage_history_sheets(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    owner = await make_user(email="rep-export-single-deal@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Single Export Deal Co")
+    deal = await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Single Export Deal")
+    headers = auth_headers(owner)
+
+    response = await client.get(f"{DEALS_URL}/{deal.id}", params={"to_export": "true"}, headers=headers)
+
+    assert response.status_code == 200
+    assert (
+        response.headers["content-type"]
+        == "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+    assert f"deal_{deal.id}.xlsx" in response.headers["content-disposition"]
+
+    import io
+
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    assert workbook.sheetnames == ["Deal", "Stage History"]
+    deal_sheet = workbook["Deal"]
+    field_col = [cell.value for cell in deal_sheet["A"]]
+    assert "Deal Name" in field_col
 
 
 # --- PATCH /deals/generic-patch ------------------------------------------

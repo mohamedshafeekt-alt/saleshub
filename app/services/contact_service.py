@@ -25,7 +25,11 @@ from app.models.user import User
 from app.schemas.contact import ContactCreate, ContactUpdate
 from app.services.audit_service import log_audit
 
-_OVERVIEW_EAGER_LOAD = (selectinload(Contact.contact_accounts).selectinload(ContactAccount.account),)
+_OVERVIEW_EAGER_LOAD = (
+    selectinload(Contact.contact_accounts)
+    .selectinload(ContactAccount.account)
+    .selectinload(Account.owner),
+)
 
 
 class ContactNotFoundError(Exception):
@@ -205,3 +209,45 @@ async def list_contacts(
 
     items = [(contact, _primary_account_link(contact)) for contact in contacts]
     return items, total
+
+
+async def export_contacts(
+    db: AsyncSession,
+    *,
+    owner_id: int | None = None,
+    account_id: int | None = None,
+    tier: LeadTier | None = None,
+    is_primary: bool | None = None,
+    search: str | None = None,
+) -> list[dict[str, Any]]:
+    """All contacts matching list_contacts's filters. No dedicated
+    no-pagination query -- reuses list_contacts with a large limit.
+    # ponytail: large-limit reuse instead of a bespoke unpaginated query;
+    # switch to a real no-pagination query if contact counts get large.
+    """
+    items, _total = await list_contacts(
+        db,
+        owner_id=owner_id,
+        account_id=account_id,
+        tier=tier,
+        is_primary=is_primary,
+        search=search,
+        limit=1_000_000,
+        offset=0,
+    )
+    rows = []
+    for contact, link in items:
+        account = link.account if link else None
+        rows.append(
+            {
+                "name": " ".join(filter(None, [contact.first_name, contact.last_name])),
+                "email": contact.email,
+                "phone": contact.phone,
+                "job_title": contact.job_title,
+                "account": account.company if account else None,
+                "owner": account.owner_name if account else None,
+                "tier": account.tier.value if account and account.tier else None,
+                "is_primary": link.is_primary if link else False,
+            }
+        )
+    return rows

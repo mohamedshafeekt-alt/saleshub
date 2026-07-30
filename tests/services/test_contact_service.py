@@ -30,6 +30,7 @@ from app.services.contact_service import (
     DuplicateContactEmailError,
     create_contact,
     delete_contact,
+    export_contacts,
     get_contact,
     get_contact_overview,
     list_contacts,
@@ -263,6 +264,31 @@ async def test_get_contact_overview_deal_count_reflects_linked_deals(
 
 
 # --- list_contacts -------------------------------------------------------------
+
+
+async def test_export_contacts_returns_flat_rows_with_account_and_owner(
+    db_session: AsyncSession, make_account, make_contact
+):
+    owner = await _make_user(db_session, "owner-export-contact@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Export Contact Co", tier=LeadTier.SILVER)
+    await make_contact(
+        account_id=account.id,
+        first_name="Jane",
+        last_name="Export",
+        email="jane.export@example.com",
+        is_primary=True,
+    )
+
+    rows = await export_contacts(db_session, account_id=account.id)
+
+    assert any(
+        row["name"] == "Jane Export"
+        and row["email"] == "jane.export@example.com"
+        and row["account"] == "Export Contact Co"
+        and row["tier"] == "silver"
+        and row["is_primary"] is True
+        for row in rows
+    )
 
 
 async def test_list_contacts_filters_by_owner_id(db_session: AsyncSession, make_account, make_contact):

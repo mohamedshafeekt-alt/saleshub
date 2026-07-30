@@ -34,6 +34,7 @@ from app.services.account_service import (
     convert_lead_to_account,
     create_account,
     delete_account,
+    export_accounts,
     get_account,
     get_account_overview,
     list_accounts,
@@ -200,6 +201,32 @@ async def test_list_accounts_search_matches_domain(db_session: AsyncSession, mak
     results, _total = await list_accounts(db_session, requester=manager, search="rocketship")
 
     assert [account.id for account in results] == [match.id]
+
+
+async def test_export_accounts_returns_flat_rows_matching_filters(db_session: AsyncSession, make_account):
+    owner = await _make_user(db_session, "owner-export-acc@example.com", UserRole.SALES_REP)
+    await make_account(
+        owner_id=owner.id,
+        company="Export Account Co",
+        domain="export-account.example.com",
+        tier=LeadTier.GOLD,
+        industry="Manufacturing",
+        city="Austin",
+    )
+
+    rows = await export_accounts(db_session, requester=owner, industry="Manufacturing")
+
+    assert any(
+        row == {
+            "company": "Export Account Co",
+            "domain": "export-account.example.com",
+            "tier": "gold",
+            "industry": "Manufacturing",
+            "city": "Austin",
+            "owner": f"{owner.first_name} {owner.last_name}".strip() if owner.last_name else owner.first_name,
+        }
+        for row in rows
+    )
 
 
 async def test_list_accounts_sales_rep_only_sees_own_accounts_even_with_owner_id_param(
