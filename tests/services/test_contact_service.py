@@ -34,6 +34,7 @@ from app.services.contact_service import (
     get_contact,
     get_contact_overview,
     list_contacts,
+    reassign_contact_owners,
     update_contact,
 )
 from tests.support.roles import UserRole, role_id_for
@@ -159,6 +160,58 @@ async def test_delete_contact_removes_the_row(db_session: AsyncSession):
         await get_contact(db_session, contact_id=contact_id)
 
 
+async def test_reassign_contact_owners_updates_representative_account(
+    db_session: AsyncSession, make_account, make_contact
+):
+    actor = await _make_user(db_session, "actor-reassign@example.com", UserRole.SALES_REP)
+    old_owner = await _make_user(db_session, "old-owner-reassign@example.com", UserRole.SALES_REP)
+    new_owner = await _make_user(db_session, "new-owner-reassign@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=old_owner.id, company="Reassign Co")
+    contact = await make_contact(account_id=account.id, first_name="Sarah", is_primary=True)
+
+    updated_count = await reassign_contact_owners(db_session, [contact.id], new_owner.id, requester=actor)
+
+    await db_session.refresh(account)
+    assert updated_count == 1
+    assert account.owner_id == new_owner.id
+
+
+async def test_reassign_contact_owners_dedupes_shared_account(
+    db_session: AsyncSession, make_account, make_contact
+):
+    actor = await _make_user(db_session, "actor-reassign-dedupe@example.com", UserRole.SALES_REP)
+    old_owner = await _make_user(db_session, "old-owner-reassign-dedupe@example.com", UserRole.SALES_REP)
+    new_owner = await _make_user(db_session, "new-owner-reassign-dedupe@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=old_owner.id, company="Shared Co")
+    contact_a = await make_contact(account_id=account.id, first_name="A", is_primary=True)
+    contact_b = await make_contact(account_id=account.id, first_name="B", is_primary=False)
+
+    updated_count = await reassign_contact_owners(
+        db_session, [contact_a.id, contact_b.id], new_owner.id, requester=actor
+    )
+
+    assert updated_count == 1
+
+
+async def test_reassign_contact_owners_skips_unlinked_contact(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-reassign-unlinked@example.com", UserRole.SALES_REP)
+    new_owner = await _make_user(db_session, "new-owner-reassign-unlinked@example.com", UserRole.SALES_REP)
+    contact = await create_contact(
+        db_session, ContactCreate(first_name="Unlinked", email="unlinked-reassign@example.com"), requester=actor
+    )
+
+    updated_count = await reassign_contact_owners(db_session, [contact.id], new_owner.id, requester=actor)
+
+    assert updated_count == 0
+
+
+async def test_reassign_contact_owners_raises_for_missing_contact(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-reassign-missing@example.com", UserRole.SALES_REP)
+
+    with pytest.raises(ContactNotFoundError):
+        await reassign_contact_owners(db_session, [999999], actor.id, requester=actor)
+
+
 async def _make_user(db_session: AsyncSession, email: str, role: UserRole, first_name: str = "Test") -> User:
     user = User(email=email, hashed_password="x", first_name=first_name, role_id=await role_id_for(db_session, role))
     db_session.add(user)
@@ -183,11 +236,12 @@ async def test_get_contact_overview_with_no_linked_accounts_returns_null_derived
         db_session, ContactCreate(first_name="Unlinked", email="unlinked@example.com"), requester=actor
     )
 
-    contact, account_link, deal_count = await get_contact_overview(db_session, created.id)
+    contact, account_link, deal_count, created_by_name = await get_contact_overview(db_session, created.id)
 
     assert contact.id == created.id
     assert account_link is None
     assert deal_count == 0
+    assert created_by_name == "Test"
 
 
 async def test_get_contact_overview_derives_owner_tier_account_from_single_link(
@@ -197,13 +251,14 @@ async def test_get_contact_overview_derives_owner_tier_account_from_single_link(
     account = await make_account(owner_id=owner.id, company="Nexbridge Tech", tier=LeadTier.GOLD)
     created = await make_contact(account_id=account.id, first_name="Sarah", is_primary=True)
 
-    contact, account_link, _deal_count = await get_contact_overview(db_session, created.id)
+    contact, account_link, _deal_count, created_by_name = await get_contact_overview(db_session, created.id)
 
     assert account_link is not None
     assert account_link.is_primary is True
     assert account_link.account.id == account.id
     assert account_link.account.company == "Nexbridge Tech"
     assert account_link.account.tier == LeadTier.GOLD
+    assert created_by_name is None  # made via make_contact, bypasses create_contact -- no audit row
     assert account_link.account.owner_id == owner.id
     assert account_link.account.owner_name == "Karthick"
 
@@ -221,7 +276,7 @@ async def test_get_contact_overview_prefers_oldest_primary_link_when_multiple_ac
     db_session.add(ContactAccount(contact_id=contact.id, account_id=account_c.id, is_primary=True))
     await db_session.flush()
 
-    _contact, account_link, _deal_count = await get_contact_overview(db_session, contact.id)
+    _contact, account_link, _deal_count, _created_by_name = await get_contact_overview(db_session, contact.id)
 
     assert account_link is not None
     assert account_link.account.company == "Account B"  # oldest is_primary=True link
@@ -239,7 +294,7 @@ async def test_get_contact_overview_falls_back_to_oldest_link_when_none_primary(
     db_session.add(ContactAccount(contact_id=contact.id, account_id=account_b.id, is_primary=False))
     await db_session.flush()
 
-    _contact, account_link, _deal_count = await get_contact_overview(db_session, contact.id)
+    _contact, account_link, _deal_count, _created_by_name = await get_contact_overview(db_session, contact.id)
 
     assert account_link is not None
     assert account_link.account.company == "First Linked Co"  # oldest link overall
@@ -258,7 +313,7 @@ async def test_get_contact_overview_deal_count_reflects_linked_deals(
         account_id=account.id, owner_id=owner.id, deal_name="Other's Deal", contact_ids=[other_contact.id]
     )
 
-    _contact, _account_link, deal_count = await get_contact_overview(db_session, contact.id)
+    _contact, _account_link, deal_count, _created_by_name = await get_contact_overview(db_session, contact.id)
 
     assert deal_count == 2
 

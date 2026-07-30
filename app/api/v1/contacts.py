@@ -22,6 +22,7 @@ from app.schemas.contact import (
     ContactListItemRead,
     ContactOverviewRead,
     ContactRead,
+    ContactReassignOwnerRequest,
     ContactUpdate,
 )
 from app.schemas.contact_import import ContactImportResult
@@ -41,6 +42,7 @@ from app.services.contact_service import (
     get_contact,
     get_contact_overview,
     list_contacts,
+    reassign_contact_owners,
     update_contact,
 )
 from app.services.deal_service import list_deals_for_contact
@@ -68,7 +70,7 @@ def _to_contact_list_item(contact: Contact, account_link: ContactAccount | None)
 
 
 def _to_contact_overview(
-    contact: Contact, account_link: ContactAccount | None, deal_count: int
+    contact: Contact, account_link: ContactAccount | None, deal_count: int, created_by_name: str | None
 ) -> ContactOverviewRead:
     account = account_link.account if account_link else None
     return ContactOverviewRead(
@@ -87,6 +89,8 @@ def _to_contact_overview(
         owner_name=account.owner_name if account else None,
         tier=account.tier if account else None,
         deal_count=deal_count,
+        created_at=contact.created_at,
+        created_by_name=created_by_name,
     )
 
 
@@ -103,6 +107,20 @@ async def create_contact_route(
 
     await db.commit()
     return ContactRead.model_validate(contact)
+
+
+@router.post("/reassign-owner", status_code=status.HTTP_204_NO_CONTENT)
+async def reassign_contact_owners_route(
+    data: ContactReassignOwnerRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    try:
+        await reassign_contact_owners(db, data.contact_ids, data.owner_id, requester=current_user)
+    except ContactNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
 
 
 @router.get("", response_model=Page[ContactListItemRead])
@@ -192,11 +210,11 @@ async def get_contact_overview_route(
     db: AsyncSession = Depends(get_db),
 ) -> ContactOverviewRead:
     try:
-        contact, account_link, deal_count = await get_contact_overview(db, contact_id)
+        contact, account_link, deal_count, created_by_name = await get_contact_overview(db, contact_id)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
-    return _to_contact_overview(contact, account_link, deal_count)
+    return _to_contact_overview(contact, account_link, deal_count, created_by_name)
 
 
 @router.get("/{contact_id}/deals", response_model=list[DealRead])

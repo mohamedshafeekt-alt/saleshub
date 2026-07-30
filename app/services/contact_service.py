@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.models.account import Account
+from app.models.audit_log import AuditLog
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.deal_contact import DealContact
@@ -24,6 +25,8 @@ from app.models.enums import AuditAction, LeadTier
 from app.models.user import User
 from app.schemas.contact import ContactCreate, ContactUpdate
 from app.services.audit_service import log_audit
+
+_REASSIGN_EAGER_LOAD = (selectinload(Contact.contact_accounts),)
 
 _OVERVIEW_EAGER_LOAD = (
     selectinload(Contact.contact_accounts)
@@ -116,6 +119,43 @@ async def delete_contact(db: AsyncSession, contact_id: int, requester: User) -> 
     )
 
 
+async def reassign_contact_owners(
+    db: AsyncSession, contact_ids: list[int], owner_id: int, requester: User
+) -> int:
+    """Bulk 'Reassign Owner' action: sets owner_id on each selected contact's
+    representative Account (see _primary_account_link), not on the contacts
+    themselves (Contact has no owner_id -- see module docstring). Contacts
+    with no linked account are silently skipped. Returns the number of
+    distinct accounts updated."""
+    result = await db.execute(
+        select(Contact).where(Contact.id.in_(contact_ids)).options(*_REASSIGN_EAGER_LOAD)
+    )
+    contacts = list(result.scalars().all())
+    found_ids = {contact.id for contact in contacts}
+    missing = set(contact_ids) - found_ids
+    if missing:
+        raise ContactNotFoundError(f"Contact(s) not found: {sorted(missing)}")
+
+    account_ids = {
+        link.account_id for contact in contacts if (link := _primary_account_link(contact)) is not None
+    }
+    if not account_ids:
+        return 0
+
+    accounts_result = await db.execute(select(Account).where(Account.id.in_(account_ids)))
+    accounts = list(accounts_result.scalars().all())
+    for account in accounts:
+        account.owner_id = owner_id
+    await db.flush()
+
+    for account in accounts:
+        await log_audit(
+            db, table_name="accounts", record_id=account.id, action=AuditAction.UPDATED,
+            actor_id=requester.id, description=f"Account '{account.company}' owner reassigned",
+        )
+    return len(accounts)
+
+
 def _primary_account_link(contact: Contact) -> ContactAccount | None:
     """The contact's oldest ContactAccount row marked primary, or its oldest
     link overall if none is primary -- a Contact can be linked to more than
@@ -130,12 +170,14 @@ def _primary_account_link(contact: Contact) -> ContactAccount | None:
 
 async def get_contact_overview(
     db: AsyncSession, contact_id: int
-) -> tuple[Contact, ContactAccount | None, int]:
+) -> tuple[Contact, ContactAccount | None, int, str | None]:
     """Contact fields + its representative Account link (see
-    _primary_account_link) + how many Deals it's linked to via DealContact.
-    tags/about/last_activity/task_count/log_count have no backing model yet
-    -- the route fills those with null, same pattern as
-    AccountOverviewRead.last_activity/next_step/total_arr."""
+    _primary_account_link) + how many Deals it's linked to via DealContact +
+    the creator's display name (from the audit log's CREATED row for this
+    contact, since Contact has no created_by column of its own). null if no
+    such audit row exists. tags/about/last_activity/task_count/log_count
+    have no backing model yet -- the route fills those with null, same
+    pattern as AccountOverviewRead.last_activity/next_step/total_arr."""
     result = await db.execute(
         select(Contact).where(Contact.id == contact_id).options(*_OVERVIEW_EAGER_LOAD)
     )
@@ -148,7 +190,26 @@ async def get_contact_overview(
         await db.execute(select(func.count(DealContact.id)).where(DealContact.contact_id == contact_id))
     ).scalar_one()
 
-    return contact, account_link, deal_count
+    created_by_log = (
+        await db.execute(
+            select(AuditLog)
+            .where(
+                AuditLog.table_name == "contacts",
+                AuditLog.record_id == contact_id,
+                AuditLog.action == AuditAction.CREATED.value,
+            )
+            .options(selectinload(AuditLog.actor))
+            .order_by(AuditLog.created_at.asc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+    created_by_name = (
+        " ".join(filter(None, [created_by_log.actor.first_name, created_by_log.actor.last_name]))
+        if created_by_log
+        else None
+    )
+
+    return contact, account_link, deal_count, created_by_name
 
 
 async def list_contacts(
