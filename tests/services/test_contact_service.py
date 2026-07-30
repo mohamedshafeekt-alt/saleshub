@@ -34,7 +34,6 @@ from app.services.contact_service import (
     get_contact,
     get_contact_overview,
     list_contacts,
-    reassign_contact_owners,
     update_contact,
 )
 from tests.support.roles import UserRole, role_id_for
@@ -158,58 +157,6 @@ async def test_delete_contact_removes_the_row(db_session: AsyncSession):
 
     with pytest.raises(ContactNotFoundError):
         await get_contact(db_session, contact_id=contact_id)
-
-
-async def test_reassign_contact_owners_updates_representative_account(
-    db_session: AsyncSession, make_account, make_contact
-):
-    actor = await _make_user(db_session, "actor-reassign@example.com", UserRole.SALES_REP)
-    old_owner = await _make_user(db_session, "old-owner-reassign@example.com", UserRole.SALES_REP)
-    new_owner = await _make_user(db_session, "new-owner-reassign@example.com", UserRole.SALES_REP)
-    account = await make_account(owner_id=old_owner.id, company="Reassign Co")
-    contact = await make_contact(account_id=account.id, first_name="Sarah", is_primary=True)
-
-    updated_count = await reassign_contact_owners(db_session, [contact.id], new_owner.id, requester=actor)
-
-    await db_session.refresh(account)
-    assert updated_count == 1
-    assert account.owner_id == new_owner.id
-
-
-async def test_reassign_contact_owners_dedupes_shared_account(
-    db_session: AsyncSession, make_account, make_contact
-):
-    actor = await _make_user(db_session, "actor-reassign-dedupe@example.com", UserRole.SALES_REP)
-    old_owner = await _make_user(db_session, "old-owner-reassign-dedupe@example.com", UserRole.SALES_REP)
-    new_owner = await _make_user(db_session, "new-owner-reassign-dedupe@example.com", UserRole.SALES_REP)
-    account = await make_account(owner_id=old_owner.id, company="Shared Co")
-    contact_a = await make_contact(account_id=account.id, first_name="A", is_primary=True)
-    contact_b = await make_contact(account_id=account.id, first_name="B", is_primary=False)
-
-    updated_count = await reassign_contact_owners(
-        db_session, [contact_a.id, contact_b.id], new_owner.id, requester=actor
-    )
-
-    assert updated_count == 1
-
-
-async def test_reassign_contact_owners_skips_unlinked_contact(db_session: AsyncSession):
-    actor = await _make_user(db_session, "actor-reassign-unlinked@example.com", UserRole.SALES_REP)
-    new_owner = await _make_user(db_session, "new-owner-reassign-unlinked@example.com", UserRole.SALES_REP)
-    contact = await create_contact(
-        db_session, ContactCreate(first_name="Unlinked", email="unlinked-reassign@example.com"), requester=actor
-    )
-
-    updated_count = await reassign_contact_owners(db_session, [contact.id], new_owner.id, requester=actor)
-
-    assert updated_count == 0
-
-
-async def test_reassign_contact_owners_raises_for_missing_contact(db_session: AsyncSession):
-    actor = await _make_user(db_session, "actor-reassign-missing@example.com", UserRole.SALES_REP)
-
-    with pytest.raises(ContactNotFoundError):
-        await reassign_contact_owners(db_session, [999999], actor.id, requester=actor)
 
 
 async def _make_user(db_session: AsyncSession, email: str, role: UserRole, first_name: str = "Test") -> User:

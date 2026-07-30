@@ -94,16 +94,6 @@ class ContactOverviewRead(BaseModel):
     last_activity: str | None = None
 
 
-class ContactReassignOwnerRequest(BaseModel):
-    """Bulk 'Reassign Owner' action on the Contacts List screen. Contact has
-    no owner_id of its own (see contact_service.py's module docstring) --
-    this reassigns owner_id on each contact's representative Account
-    (contact_service._primary_account_link) instead."""
-
-    contact_ids: list[int]
-    owner_id: int
-
-
 class ContactListItemRead(BaseModel):
     """One row of the Contacts List screen. account_id/account_name/owner
     fields are derived the same way as ContactOverviewRead (see its
