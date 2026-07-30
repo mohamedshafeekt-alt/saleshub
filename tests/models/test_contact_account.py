@@ -40,8 +40,8 @@ async def _make_account(db_session: AsyncSession, owner_id: int, company: str = 
     return account
 
 
-async def _make_contact(db_session: AsyncSession, first_name: str = "Jane") -> Contact:
-    contact = Contact(first_name=first_name)
+async def _make_contact(db_session: AsyncSession, first_name: str = "Jane", email: str | None = None) -> Contact:
+    contact = Contact(first_name=first_name, email=email or f"{first_name.lower().replace(' ', '-')}-ca@example.com")
     db_session.add(contact)
     await db_session.flush()
     return contact
@@ -100,6 +100,7 @@ async def test_a_contact_can_link_to_more_than_one_account(db_session: AsyncSess
     db_session.add(ContactAccount(contact_id=contact.id, account_id=account_a.id))
     db_session.add(ContactAccount(contact_id=contact.id, account_id=account_b.id))
     await db_session.flush()
+    await db_session.refresh(contact, attribute_names=["contact_accounts"])
 
     assert len(contact.contact_accounts) == 2
 
@@ -129,5 +130,6 @@ async def test_second_non_primary_contact_for_same_account_is_allowed(db_session
 
     db_session.add(ContactAccount(contact_id=contact_b.id, account_id=account.id, is_primary=False))
     await db_session.flush()  # should not raise
+    await db_session.refresh(account, attribute_names=["contact_accounts"])
 
     assert len(account.contact_accounts) == 2

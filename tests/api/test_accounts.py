@@ -557,7 +557,7 @@ async def test_get_account_returns_200_for_owning_sales_rep(
 
 
 async def test_get_account_overview_returns_200_with_computed_fields(
-    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_contact
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_contact
 ):
     owner = await make_user(email="rep-overview@example.com", role=UserRole.SALES_REP, first_name="Karthick")
     account = await make_account(
@@ -565,12 +565,13 @@ async def test_get_account_overview_returns_200_with_computed_fields(
     )
     await make_contact(account_id=account.id, first_name="Sarah", job_title="CTO")
     await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Cloud Migration", value=650_000)
+    closed_stage = await make_deal_stage(name="Closed Won")
     await make_deal(
         account_id=account.id,
         owner_id=owner.id,
         deal_name="Closed Deal",
         value=999_999,
-        stage="closed_won",
+        stage_id=closed_stage.id,
     )
     headers = auth_headers(owner)
 
