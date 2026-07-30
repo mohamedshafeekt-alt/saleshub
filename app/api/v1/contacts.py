@@ -174,6 +174,7 @@ async def download_contact_import_template_route(
 @router.post("/import", response_model=ContactImportResult)
 async def import_contacts_route(
     file: UploadFile,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactImportResult:
     if not file.filename or not file.filename.lower().endswith((".xlsx", ".csv")):
@@ -183,7 +184,7 @@ async def import_contacts_route(
     try:
         # import_contacts commits each successful row itself (see its module
         # docstring), so there's nothing left pending to commit here.
-        return await import_contacts(db, content, file.filename)
+        return await import_contacts(db, content, file.filename, requester=current_user)
     except ContactImportFileError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

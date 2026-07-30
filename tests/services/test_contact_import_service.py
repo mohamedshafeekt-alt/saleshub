@@ -68,10 +68,11 @@ def test_build_contact_import_template_csv_has_header_and_example_row():
     assert len(rows) == 2
 
 
-async def test_import_contacts_creates_valid_row_from_xlsx(db_session: AsyncSession):
+async def test_import_contacts_creates_valid_row_from_xlsx(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-xlsx@example.com")
     row = {"first_name": "Jane", "last_name": "Doe", "email": "jane.import.xlsx@acme.com", "job_title": "VP Sales"}
 
-    result = await import_contacts(db_session, _xlsx_bytes([row]), "contacts.xlsx")
+    result = await import_contacts(db_session, _xlsx_bytes([row]), "contacts.xlsx", requester=actor)
 
     assert result.created == 1
     assert result.errors == []
@@ -81,10 +82,11 @@ async def test_import_contacts_creates_valid_row_from_xlsx(db_session: AsyncSess
     assert created.job_title == "VP Sales"
 
 
-async def test_import_contacts_creates_valid_row_from_csv(db_session: AsyncSession):
+async def test_import_contacts_creates_valid_row_from_csv(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-csv@example.com")
     row = {"first_name": "Jane", "last_name": "Doe", "email": "jane.import.csv@acme.com", "job_title": "VP Sales"}
 
-    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv")
+    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv", requester=actor)
 
     assert result.created == 1
     assert result.errors == []
@@ -94,75 +96,82 @@ async def test_import_contacts_creates_valid_row_from_csv(db_session: AsyncSessi
     assert created.job_title == "VP Sales"
 
 
-async def test_import_contacts_reports_missing_required_field(db_session: AsyncSession):
+async def test_import_contacts_reports_missing_required_field(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-missing-field@example.com")
     row = {"first_name": "Jane"}  # missing email
 
-    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv")
+    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv", requester=actor)
 
     assert result.created == 0
     assert len(result.errors) == 1
     assert result.errors[0].row == 2
 
 
-async def test_import_contacts_reports_invalid_linkedin_url(db_session: AsyncSession):
-    row = {"first_name": "Jane", "email": "jane.badlinkedin@acme.com", "linkedin_url": "linkedin.com/in/jane"}
+async def test_import_contacts_reports_invalid_linkedin_url(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-bad-linkedin@example.com")
+    row = {"first_name": "Jane", "email": "jane.badlinkedin@acme.com", "linkedin_url": "not-a-linkedin-url.com/in/jane"}
 
-    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv")
+    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv", requester=actor)
 
     assert result.created == 0
     assert len(result.errors) == 1
 
 
-async def test_import_contacts_reports_duplicate_against_existing_contact(db_session: AsyncSession):
+async def test_import_contacts_reports_duplicate_against_existing_contact(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-duplicate@example.com")
     await create_contact(
-        db_session, ContactCreate(first_name="Existing", email="existing-import@acme.com")
+        db_session, ContactCreate(first_name="Existing", email="existing-import@acme.com"), requester=actor
     )
     row = {"first_name": "Jane", "email": "existing-import@acme.com"}
 
-    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv")
+    result = await import_contacts(db_session, _csv_bytes([row]), "contacts.csv", requester=actor)
 
     assert result.created == 0
     assert len(result.errors) == 1
     assert "existing-import@acme.com" in result.errors[0].error
 
 
-async def test_import_contacts_reports_duplicate_within_file(db_session: AsyncSession):
+async def test_import_contacts_reports_duplicate_within_file(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-duplicate-file@example.com")
     row = {"first_name": "Jane", "email": "dup-import@acme.com"}
 
-    result = await import_contacts(db_session, _csv_bytes([row, dict(row)]), "contacts.csv")
+    result = await import_contacts(db_session, _csv_bytes([row, dict(row)]), "contacts.csv", requester=actor)
 
     assert result.created == 1
     assert len(result.errors) == 1
     assert result.errors[0].row == 3
 
 
-async def test_import_contacts_missing_email_header_column_reports_row_error(db_session: AsyncSession):
+async def test_import_contacts_missing_email_header_column_reports_row_error(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-missing-header@example.com")
     buffer = io.StringIO()
     writer = csv.DictWriter(buffer, fieldnames=["first_name", "last_name"])
     writer.writeheader()
     writer.writerow({"first_name": "Jane", "last_name": "Doe"})
     csv_bytes = buffer.getvalue().encode("utf-8")
 
-    result = await import_contacts(db_session, csv_bytes, "contacts.csv")
+    result = await import_contacts(db_session, csv_bytes, "contacts.csv", requester=actor)
 
     assert result.created == 0
     assert len(result.errors) == 1
     assert result.errors[0].row == 2
 
 
-async def test_import_contacts_raises_for_corrupt_xlsx_upload(db_session: AsyncSession):
+async def test_import_contacts_raises_for_corrupt_xlsx_upload(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-corrupt@example.com")
     with pytest.raises(ContactImportFileError):
-        await import_contacts(db_session, b"not a real xlsx file", "contacts.xlsx")
+        await import_contacts(db_session, b"not a real xlsx file", "contacts.xlsx", requester=actor)
 
 
-async def test_import_contacts_raises_for_non_utf8_csv_upload(db_session: AsyncSession):
+async def test_import_contacts_raises_for_non_utf8_csv_upload(db_session: AsyncSession, make_user):
+    actor = await make_user(email="actor-import-non-utf8@example.com")
     csv_bytes = "first_name,email\nJosé,jose@acme.com\n".encode("latin-1")
 
     with pytest.raises(ContactImportFileError):
-        await import_contacts(db_session, csv_bytes, "contacts.csv")
+        await import_contacts(db_session, csv_bytes, "contacts.csv", requester=actor)
 
 
-async def test_import_contacts_earlier_row_survives_later_duplicate_email_failure(db_session: AsyncSession):
+async def test_import_contacts_earlier_row_survives_later_duplicate_email_failure(db_session: AsyncSession, make_user):
     """create_contact's duplicate-email handling rolls back the whole shared
     session on IntegrityError, not just the failing row. Committing each
     successful row immediately (rather than once at the end) is what keeps
@@ -172,8 +181,9 @@ async def test_import_contacts_earlier_row_survives_later_duplicate_email_failur
         {"first_name": "Dup", "email": "first-row@acme.com"},
         {"first_name": "Third", "email": "third-row@acme.com"},
     ]
+    actor = await make_user(email="actor-import-earlier-row-survives@example.com")
 
-    result = await import_contacts(db_session, _csv_bytes(rows), "contacts.csv")
+    result = await import_contacts(db_session, _csv_bytes(rows), "contacts.csv", requester=actor)
 
     assert result.created == 2
     assert len(result.errors) == 1
