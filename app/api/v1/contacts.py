@@ -22,7 +22,6 @@ from app.schemas.contact import (
     ContactListItemRead,
     ContactOverviewRead,
     ContactRead,
-    ContactReassignOwnerRequest,
     ContactUpdate,
 )
 from app.schemas.contact_import import ContactImportResult
@@ -42,7 +41,6 @@ from app.services.contact_service import (
     get_contact,
     get_contact_overview,
     list_contacts,
-    reassign_contact_owners,
     update_contact,
 )
 from app.services.deal_service import list_deals_for_contact
@@ -107,20 +105,6 @@ async def create_contact_route(
 
     await db.commit()
     return ContactRead.model_validate(contact)
-
-
-@router.post("/reassign-owner", status_code=status.HTTP_204_NO_CONTENT)
-async def reassign_contact_owners_route(
-    data: ContactReassignOwnerRequest,
-    current_user: User = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
-) -> None:
-    try:
-        await reassign_contact_owners(db, data.contact_ids, data.owner_id, requester=current_user)
-    except ContactNotFoundError as exc:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-
-    await db.commit()
 
 
 @router.get("", response_model=Page[ContactListItemRead])

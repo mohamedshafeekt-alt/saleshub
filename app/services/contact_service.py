@@ -26,8 +26,6 @@ from app.models.user import User
 from app.schemas.contact import ContactCreate, ContactUpdate
 from app.services.audit_service import log_audit
 
-_REASSIGN_EAGER_LOAD = (selectinload(Contact.contact_accounts),)
-
 _OVERVIEW_EAGER_LOAD = (
     selectinload(Contact.contact_accounts)
     .selectinload(ContactAccount.account)
@@ -117,43 +115,6 @@ async def delete_contact(db: AsyncSession, contact_id: int, requester: User) -> 
         db, table_name="contacts", record_id=contact_id_, action=AuditAction.DELETED,
         actor_id=requester.id, description=f"Contact '{name}' deleted",
     )
-
-
-async def reassign_contact_owners(
-    db: AsyncSession, contact_ids: list[int], owner_id: int, requester: User
-) -> int:
-    """Bulk 'Reassign Owner' action: sets owner_id on each selected contact's
-    representative Account (see _primary_account_link), not on the contacts
-    themselves (Contact has no owner_id -- see module docstring). Contacts
-    with no linked account are silently skipped. Returns the number of
-    distinct accounts updated."""
-    result = await db.execute(
-        select(Contact).where(Contact.id.in_(contact_ids)).options(*_REASSIGN_EAGER_LOAD)
-    )
-    contacts = list(result.scalars().all())
-    found_ids = {contact.id for contact in contacts}
-    missing = set(contact_ids) - found_ids
-    if missing:
-        raise ContactNotFoundError(f"Contact(s) not found: {sorted(missing)}")
-
-    account_ids = {
-        link.account_id for contact in contacts if (link := _primary_account_link(contact)) is not None
-    }
-    if not account_ids:
-        return 0
-
-    accounts_result = await db.execute(select(Account).where(Account.id.in_(account_ids)))
-    accounts = list(accounts_result.scalars().all())
-    for account in accounts:
-        account.owner_id = owner_id
-    await db.flush()
-
-    for account in accounts:
-        await log_audit(
-            db, table_name="accounts", record_id=account.id, action=AuditAction.UPDATED,
-            actor_id=requester.id, description=f"Account '{account.company}' owner reassigned",
-        )
-    return len(accounts)
 
 
 def _primary_account_link(contact: Contact) -> ContactAccount | None:
