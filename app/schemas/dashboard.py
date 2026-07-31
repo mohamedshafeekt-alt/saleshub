@@ -3,6 +3,8 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+from app.schemas.base import ORMBase
+
 
 class DashboardTile(BaseModel):
     value: int
@@ -68,7 +70,7 @@ class ConversionTrendResponse(BaseModel):
     entries: list[ConversionTrendEntry]
 
 
-class ActivityFeedEntry(BaseModel):
+class ActivityFeedEntry(ORMBase):
     entity_type: Literal["deal", "lead", "account"]
     entity_id: int
     type: str
