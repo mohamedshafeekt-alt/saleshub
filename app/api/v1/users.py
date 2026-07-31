@@ -18,6 +18,7 @@ from app.services.user_service import (
     RoleNotFoundError,
     UnsupportedImageTypeError,
     UserNotFoundError,
+    activate_user,
     change_password,
     create_user,
     list_users,
@@ -135,3 +136,20 @@ async def delete_user_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     await db.commit()
+
+
+@router.post("/{user_id}/activate", response_model=UserRead)
+@requires_permission(USERS_MANAGE)
+async def activate_user_route(
+    user_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRead:
+    try:
+        await activate_user(db, user_id, actor_id=current_user.id)
+    except UserNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
+    user = await db.get(User, user_id)
+    return UserRead.model_validate(user)
