@@ -318,6 +318,22 @@ async def convert_lead_to_account(
     db.add(account)
     lead.is_converted = True
     await db.flush()
+
+    contact = (
+        await db.execute(select(Contact).where(Contact.email == lead.email))
+    ).scalar_one_or_none()
+    if contact is None:
+        contact = Contact(
+            first_name=lead.first_name,
+            last_name=lead.last_name,
+            email=lead.email,
+            phone=lead.phone,
+            linkedin_url=lead.linkedin_url,
+        )
+        db.add(contact)
+        await db.flush()
+    db.add(ContactAccount(contact_id=contact.id, account_id=account.id, is_primary=True))
+    await db.flush()
     await db.refresh(account, attribute_names=["owner", "contact_accounts", "deals"])
     await log_audit(
         db, table_name="accounts", record_id=account.id, action=AuditAction.CREATED,

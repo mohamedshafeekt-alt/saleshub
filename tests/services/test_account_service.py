@@ -548,6 +548,58 @@ async def test_convert_lead_to_account_copies_fields_and_sets_source_lead_id(
     assert account.linkedin_url == "https://linkedin.com/company/convert-co"
 
 
+async def test_convert_lead_to_account_creates_primary_contact_from_lead(
+    db_session: AsyncSession, make_lead
+):
+    owner = await _make_user(db_session, "owner-convert-contact@example.com", UserRole.SALES_REP)
+    lead = await make_lead(
+        owner_id=owner.id,
+        email="convert-contact@example.com",
+        first_name="Selva",
+        last_name="Kumar",
+        phone="9876543210",
+        linkedin_url="https://linkedin.com/in/selva",
+    )
+
+    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
+
+    contact_account = (
+        await db_session.execute(
+            select(ContactAccount).where(ContactAccount.account_id == account.id)
+        )
+    ).scalar_one()
+    assert contact_account.is_primary is True
+
+    contact = (
+        await db_session.execute(select(Contact).where(Contact.id == contact_account.contact_id))
+    ).scalar_one()
+    assert contact.first_name == "Selva"
+    assert contact.last_name == "Kumar"
+    assert contact.email == "convert-contact@example.com"
+    assert contact.phone == "9876543210"
+    assert contact.linkedin_url == "https://linkedin.com/in/selva"
+
+
+async def test_convert_lead_to_account_reuses_existing_contact_with_same_email(
+    db_session: AsyncSession, make_lead
+):
+    owner = await _make_user(db_session, "owner-convert-reuse@example.com", UserRole.SALES_REP)
+    existing_contact = Contact(first_name="Existing", email="reuse-me@example.com")
+    db_session.add(existing_contact)
+    await db_session.flush()
+
+    lead = await make_lead(owner_id=owner.id, email="reuse-me@example.com", first_name="Selva")
+
+    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
+
+    contact_account = (
+        await db_session.execute(
+            select(ContactAccount).where(ContactAccount.account_id == account.id)
+        )
+    ).scalar_one()
+    assert contact_account.contact_id == existing_contact.id
+
+
 async def test_convert_lead_to_account_marks_lead_as_converted(db_session: AsyncSession, make_lead):
     owner = await _make_user(db_session, "owner-convert-flag@example.com", UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="convert-flag@example.com")
