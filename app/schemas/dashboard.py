@@ -16,6 +16,7 @@ class DashboardSummary(BaseModel):
     qualified_leads: DashboardTile
     deals_in_pipeline: DashboardTile
     deals_closed: DashboardTile
+    num_accounts: DashboardTile
 
 
 class FunnelStage(BaseModel):

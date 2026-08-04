@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
+from app.models.account import Account
 from app.models.account_activity import AccountActivity
 from app.models.deal import Deal
 from app.models.deal_activity import DealActivity
@@ -45,22 +46,26 @@ CLOSED_LOST_STAGE_NAME = "Closed Lost"
 
 QUALIFIED_LEAD_STATUSES = (LeadStatus.CONTACTED, LeadStatus.CONTACT_IN_FUTURE)
 
-Period = Literal["today", "this_week", "this_month"]
+Period = Literal["this_week", "this_month", "custom"]
 
 _TRUNC_UNIT: dict[str, str] = {"daily": "day", "weekly": "week", "monthly": "month"}
 
 
-def _period_bounds(period: Period, today: date) -> tuple[date, date, date, date]:
-    if period == "today":
-        start = today
+def _period_bounds(
+    period: Period, today: date, *, start_date: date | None = None, end_date: date | None = None
+) -> tuple[date, date, date, date]:
+    if period == "custom":
+        if start_date is None or end_date is None:
+            raise ValueError("start_date and end_date are required when period='custom'")
+        start, end = start_date, end_date
     elif period == "this_week":
-        start = today - timedelta(days=today.weekday())
+        start, end = today - timedelta(days=today.weekday()), today
     else:
-        start = today.replace(day=1)
-    length = (today - start).days + 1
+        start, end = today.replace(day=1), today
+    length = (end - start).days + 1
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=length - 1)
-    return start, today, prev_start, prev_end
+    return start, end, prev_start, prev_end
 
 
 def _change_pct(value: int, prev: int) -> float | None:
@@ -108,9 +113,20 @@ async def _count_deals_closed(db: AsyncSession, lo: date, hi: date) -> int:
     return result.scalar_one()
 
 
-async def get_summary(db: AsyncSession, *, period: Period = "this_month") -> DashboardSummary:
+async def _count_accounts(db: AsyncSession) -> int:
+    result = await db.execute(select(func.count(Account.id)))
+    return result.scalar_one()
+
+
+async def get_summary(
+    db: AsyncSession,
+    *,
+    period: Period = "this_month",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> DashboardSummary:
     today = date.today()
-    start, end, prev_start, prev_end = _period_bounds(period, today)
+    start, end, prev_start, prev_end = _period_bounds(period, today, start_date=start_date, end_date=end_date)
 
     leads_now = await _count_leads(db, start, end, qualified_only=False)
     leads_prev = await _count_leads(db, prev_start, prev_end, qualified_only=False)
@@ -119,12 +135,14 @@ async def get_summary(db: AsyncSession, *, period: Period = "this_month") -> Das
     pipeline_now = await _count_deals_in_pipeline(db)
     closed_now = await _count_deals_closed(db, start, end)
     closed_prev = await _count_deals_closed(db, prev_start, prev_end)
+    accounts_now = await _count_accounts(db)
 
     return DashboardSummary(
         leads_generated=DashboardTile(value=leads_now, change_pct=_change_pct(leads_now, leads_prev)),
         qualified_leads=DashboardTile(value=qualified_now, change_pct=_change_pct(qualified_now, qualified_prev)),
         deals_in_pipeline=DashboardTile(value=pipeline_now, change_pct=None),
         deals_closed=DashboardTile(value=closed_now, change_pct=_change_pct(closed_now, closed_prev)),
+        num_accounts=DashboardTile(value=accounts_now, change_pct=None),
     )
 
 
@@ -228,11 +246,17 @@ def _drop_off_query(lo: date | None = None, hi: date | None = None):
     return query.order_by(func.count(Deal.id).desc())
 
 
-async def get_drop_off_reasons(db: AsyncSession, *, period: Period = "this_month") -> DropOffReasonsResponse:
+async def get_drop_off_reasons(
+    db: AsyncSession,
+    *,
+    period: Period = "this_month",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> DropOffReasonsResponse:
     rows = (await db.execute(_drop_off_query())).all()
 
     today = date.today()
-    start, end, prev_start, prev_end = _period_bounds(period, today)
+    start, end, prev_start, prev_end = _period_bounds(period, today, start_date=start_date, end_date=end_date)
     now_counts = {(reason, stage): count for reason, stage, count, _ in (await db.execute(_drop_off_query(start, end))).all()}
     prev_counts = {
         (reason, stage): count for reason, stage, count, _ in (await db.execute(_drop_off_query(prev_start, prev_end))).all()

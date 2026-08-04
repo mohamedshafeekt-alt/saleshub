@@ -25,8 +25,10 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     account = await make_account(owner_id=user.id, company="Acme")
     open_stage = await make_deal_stage(name="Evaluation", sort_order=2, is_cold=False)
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5, is_cold=False)
+    lost_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Lost", sort_order=6, is_cold=False)
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=1000)
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=won_stage.id, value=2000)
+    await make_deal(account_id=account.id, owner_id=user.id, stage_id=lost_stage.id, value=500)
 
     response = await client.get("/api/v1/dashboard", headers=headers)
 
@@ -35,12 +37,51 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     assert summary["leads_generated"]["value"] == 2
     assert summary["qualified_leads"]["value"] == 1
     assert summary["deals_in_pipeline"]["value"] == 1
+    # Only Closed Won counts as "closed" — the Closed Lost deal above must not.
     assert summary["deals_closed"]["value"] == 1
+    assert summary["num_accounts"]["value"] == 1
 
 
 async def test_dashboard_requires_authentication(client: AsyncClient):
     response = await client.get("/api/v1/dashboard")
     assert response.status_code == 401
+
+
+async def test_dashboard_period_rejects_today_and_requires_range_for_custom(
+    client: AsyncClient, make_user, auth_headers
+):
+    user = await make_user(email="period@example.com")
+    headers = auth_headers(user)
+
+    assert (await client.get("/api/v1/dashboard?period=today", headers=headers)).status_code == 422
+    assert (await client.get("/api/v1/dashboard?period=custom", headers=headers)).status_code == 422
+
+
+async def test_dashboard_custom_period_scopes_leads_to_given_range(
+    client: AsyncClient, make_user, auth_headers, make_lead, db_session
+):
+    from datetime import datetime
+
+    from app.models.enums import LeadStatus
+
+    user = await make_user(email="custom@example.com")
+    headers = auth_headers(user)
+
+    in_range = await make_lead(owner_id=user.id, email="in@range.com", company="InRange", status=LeadStatus.NOT_CONTACTED)
+    in_range.created_at = datetime(2026, 1, 15)
+    out_of_range = await make_lead(
+        owner_id=user.id, email="out@range.com", company="OutOfRange", status=LeadStatus.NOT_CONTACTED
+    )
+    out_of_range.created_at = datetime(2026, 2, 15)
+    await db_session.flush()
+    await db_session.commit()
+
+    response = await client.get(
+        "/api/v1/dashboard?period=custom&start_date=2026-01-01&end_date=2026-01-31", headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["summary"]["leads_generated"]["value"] == 1
 
 
 async def test_dashboard_funnel_orders_stages_by_sort_order(
