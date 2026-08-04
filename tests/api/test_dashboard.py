@@ -1,14 +1,25 @@
 """HTTP-level contract for GET /api/v1/dashboard.
 
 Covers: summary tiles (leads generated/qualified, deals in pipeline/closed),
-401 with no auth, funnel ordered by stage sort_order, deal distribution
-grouped by tier, leaderboard ranked by won-deal revenue, drop-off reasons
-grouped by cold_reason across cold and closed-lost stages, conversion trend
-counting stage-history transitions, and the merged/paginated activity feed —
-all returned together from the single combined endpoint.
+401 with no auth, 403 without dashboard.view, funnel ordered by stage
+sort_order, deal distribution grouped by tier, leaderboard ranked by
+won-deal revenue, drop-off reasons grouped by cold_reason across cold and
+closed-lost stages, conversion trend counting stage-history transitions,
+and the merged/paginated activity feed — all returned together from the
+single combined endpoint. dashboard.view is a Sales Manager/Admin-only
+permission (see rbac_seed.STARTER_ROLES), so every request here authenticates
+as a Sales Manager unless the test is specifically checking the 403 case.
 """
 
 from httpx import AsyncClient
+
+from tests.support.roles import UserRole
+
+
+async def test_dashboard_requires_dashboard_view_permission(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="dashboard-rep@example.com", role=UserRole.SALES_REP)
+    response = await client.get("/api/v1/dashboard", headers=auth_headers(rep))
+    assert response.status_code == 403
 
 
 async def test_dashboard_counts_leads_and_deals_in_current_month(
@@ -18,7 +29,7 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
 
     from app.models.enums import LeadStatus
 
-    user = await make_user(email="rep@example.com")
+    user = await make_user(email="rep@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
 
     await make_lead(owner_id=user.id, email="a@acme.com", company="Acme", status=LeadStatus.NOT_CONTACTED)
@@ -62,7 +73,7 @@ async def test_dashboard_requires_authentication(client: AsyncClient):
 async def test_dashboard_period_rejects_today_and_requires_range_for_custom(
     client: AsyncClient, make_user, auth_headers
 ):
-    user = await make_user(email="period@example.com")
+    user = await make_user(email="period@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
 
     assert (await client.get("/api/v1/dashboard?period=today", headers=headers)).status_code == 422
@@ -76,7 +87,7 @@ async def test_dashboard_custom_period_scopes_leads_to_given_range(
 
     from app.models.enums import LeadStatus
 
-    user = await make_user(email="custom@example.com")
+    user = await make_user(email="custom@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
 
     in_range = await make_lead(owner_id=user.id, email="in@range.com", company="InRange", status=LeadStatus.NOT_CONTACTED)
@@ -101,7 +112,7 @@ async def test_dashboard_funnel_counts_stage_entries_this_period_ordered_by_sort
 ):
     from app.models.deal_stage_history import DealStageHistory
 
-    user = await make_user(email="funnel@example.com")
+    user = await make_user(email="funnel@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
     account = await make_account(owner_id=user.id, company="FunnelCo")
     stage_a = await make_deal_stage(name="Received Requirements", sort_order=0)
@@ -141,7 +152,7 @@ async def test_dashboard_deal_distribution_groups_by_tier_within_period(
 
     from app.models.enums import LeadTier
 
-    user = await make_user(email="dist@example.com")
+    user = await make_user(email="dist@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
     account = await make_account(owner_id=user.id, company="DistCo")
     stage = await make_deal_stage(name="Evaluation", sort_order=0)
@@ -167,7 +178,7 @@ async def test_dashboard_leaderboard_ranks_owners_by_won_revenue_within_period(
 ):
     from datetime import datetime
 
-    rep_1 = await make_user(email="rep1@example.com", first_name="Sarah")
+    rep_1 = await make_user(email="rep1@example.com", first_name="Sarah", role=UserRole.SALES_MANAGER)
     rep_2 = await make_user(email="rep2@example.com", first_name="Mike")
     headers = auth_headers(rep_1)
     account = await make_account(owner_id=rep_1.id, company="LeadersCo")
@@ -197,7 +208,7 @@ async def test_dashboard_drop_off_reasons_groups_cold_and_lost_deals_by_reason_a
 ):
     from app.models.deal_stage_history import DealStageHistory
 
-    user = await make_user(email="dropoff@example.com")
+    user = await make_user(email="dropoff@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
     account = await make_account(owner_id=user.id, company="DropOffCo")
     open_stage = await make_deal_stage(name="Proposals", sort_order=3)
@@ -238,7 +249,7 @@ async def test_dashboard_conversion_trend_counts_stage_transitions_within_period
 
     from app.models.deal_stage_history import DealStageHistory
 
-    user = await make_user(email="trend@example.com")
+    user = await make_user(email="trend@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
     account = await make_account(owner_id=user.id, company="TrendCo")
     stage_a = await make_deal_stage(name="Evaluation", sort_order=1)
@@ -279,7 +290,7 @@ async def test_dashboard_activity_feed_merges_and_sorts_across_entities_within_p
     from app.models.deal_activity import DealActivity
     from app.models.lead_activity import LeadActivity
 
-    user = await make_user(email="feed@example.com")
+    user = await make_user(email="feed@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
     account = await make_account(owner_id=user.id, company="FeedCo")
     stage = await make_deal_stage(name="Evaluation", sort_order=0)

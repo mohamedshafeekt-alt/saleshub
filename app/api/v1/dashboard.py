@@ -5,6 +5,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user
+from app.core.permission_codes import DASHBOARD_VIEW
+from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.user import User
 from app.schemas.dashboard import DashboardOverviewResponse
@@ -45,3 +47,6 @@ async def get_dashboard_route(
             db, period=period, start_date=start_date, end_date=end_date, limit=limit, offset=offset
         ),
     )
+
+
+tag_router_permissions(router, DASHBOARD_VIEW)
