@@ -148,7 +148,9 @@ async def list_deals_route(
     db: AsyncSession = Depends(get_db),
 ) -> DealsListResponse | StreamingResponse:
     if to_export:
-        rows = await export_deals(db, requester=current_user, stage_id=stage_id, tier=tier, search=search)
+        rows = await export_deals(
+            db, requester=current_user, owner_id=owner_id, stage_id=stage_id, tier=tier, search=search
+        )
         buffer = rows_to_xlsx(
             [
                 "Deal Name", "Account", "Contact", "Value", "Currency",

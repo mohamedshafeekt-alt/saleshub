@@ -1233,6 +1233,26 @@ async def test_list_leads_to_export_returns_valid_xlsx_with_expected_rows(
     assert any(row[3] == "Export Xlsx Lead Co" for row in data_rows)
 
 
+async def test_list_leads_to_export_filters_by_owner_id(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    """export must respect owner_id the same way list_leads does."""
+    manager = await make_user(email="manager-export-owner-filter@example.com", role=UserRole.SALES_MANAGER)
+    rep_a = await make_user(email="rep-a-export-owner-filter@example.com", role=UserRole.SALES_REP)
+    rep_b = await make_user(email="rep-b-export-owner-filter@example.com", role=UserRole.SALES_REP)
+    await make_lead(owner_id=rep_a.id, email="owner-a-lead@example.com", company="Owner A Co")
+    await make_lead(owner_id=rep_b.id, email="owner-b-lead@example.com", company="Owner B Co")
+    headers = auth_headers(manager)
+
+    response = await client.get(LEADS_URL, params={"to_export": "true", "owner_id": rep_a.id}, headers=headers)
+
+    assert response.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    data_rows = list(workbook.active.iter_rows(min_row=2, values_only=True))
+    companies = {row[3] for row in data_rows}
+    assert companies == {"Owner A Co"}
+
+
 async def test_leads_export_route_no_longer_exists(client: AsyncClient, make_user, auth_headers):
     """"/export" now falls through to GET /leads/{lead_id} and fails int
     path-param validation (422), since the dedicated /export route is gone."""

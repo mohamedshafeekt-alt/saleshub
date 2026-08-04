@@ -650,6 +650,29 @@ async def test_deals_export_route_no_longer_exists(client: AsyncClient, make_use
     assert response.status_code == 422
 
 
+async def test_list_deals_to_export_filters_by_owner_id(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    """export must respect owner_id the same way list_deals does."""
+    manager = await make_user(email="manager-export-owner-filter@example.com", role=UserRole.SALES_MANAGER)
+    rep_a = await make_user(email="rep-a-deal-owner-filter@example.com", role=UserRole.SALES_REP)
+    rep_b = await make_user(email="rep-b-deal-owner-filter@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep_a.id, company="Deal Owner Filter Co")
+    await make_deal(account_id=account.id, owner_id=rep_a.id, deal_name="Owner A Deal")
+    await make_deal(account_id=account.id, owner_id=rep_b.id, deal_name="Owner B Deal")
+    headers = auth_headers(manager)
+
+    response = await client.get(DEALS_URL, params={"to_export": "true", "owner_id": rep_a.id}, headers=headers)
+
+    assert response.status_code == 200
+    import io
+
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    data_rows = list(workbook.active.iter_rows(min_row=2, values_only=True))
+    names = {row[0] for row in data_rows}
+    assert names == {"Owner A Deal"}
+
+
 async def test_list_deals_to_export_scopes_to_requester_for_non_view_all_role(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal
 ):

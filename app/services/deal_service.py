@@ -385,6 +385,7 @@ async def export_deals(
     db: AsyncSession,
     *,
     requester: User,
+    owner_id: int | None = None,
     stage_id: int | None = None,
     tier: LeadTier | None = None,
     search: str | None = None,
@@ -392,7 +393,7 @@ async def export_deals(
     """All deals matching the requester's role-scoping, ignoring any
     account_id filter (export is always cross-account). No pagination."""
     filters, _owner_id, _needs_join = _deal_filters(
-        requester=requester, owner_id=None, account_id=None, stage_id=stage_id, tier=tier, search=search
+        requester=requester, owner_id=owner_id, account_id=None, stage_id=stage_id, tier=tier, search=search
     )
 
     owner_name = func.trim(
