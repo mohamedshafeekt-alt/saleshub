@@ -576,6 +576,7 @@ async def test_stage_history_returns_200_reflecting_transitions_after_patches(
     assert response.status_code == 200
     body = response.json()
     assert [row["to_stage_id"] for row in body] == [stage_2.id, stage_3.id]
+    assert all(row["changed_by_name"] == owner.first_name for row in body)
 
 
 async def test_stage_history_returns_404_for_nonexistent_deal(client: AsyncClient, make_user, auth_headers):

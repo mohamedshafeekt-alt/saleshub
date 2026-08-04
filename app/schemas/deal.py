@@ -69,6 +69,7 @@ class DealStageHistoryRead(ORMBase):
     from_stage_id: int | None
     to_stage_id: int
     changed_by: int
+    changed_by_name: str
     note: str | None
     created_at: datetime
 

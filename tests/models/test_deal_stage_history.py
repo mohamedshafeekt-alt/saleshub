@@ -126,6 +126,27 @@ async def test_to_stage_is_required(db_session: AsyncSession):
         await db_session.flush()
 
 
+async def test_changed_by_name_reflects_the_acting_user(db_session: AsyncSession):
+    from app.models.deal_stage_history import DealStageHistory
+
+    owner = await _make_owner(db_session, email="owner6@example.com")
+    owner.last_name = "Smith"
+    deal = await _make_deal(db_session, owner.id, "6")
+    next_stage = await _make_stage(db_session, "6-next")
+
+    history = DealStageHistory(
+        deal_id=deal.id,
+        from_stage_id=deal.stage_id,
+        to_stage_id=next_stage.id,
+        changed_by=owner.id,
+    )
+    db_session.add(history)
+    await db_session.flush()
+    await db_session.refresh(history)
+
+    assert history.changed_by_name == "Owner Smith"
+
+
 async def test_changed_by_is_required(db_session: AsyncSession):
     from app.models.deal_stage_history import DealStageHistory
 

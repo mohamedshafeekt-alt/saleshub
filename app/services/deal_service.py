@@ -356,7 +356,7 @@ async def list_stage_history(
     query = (
         select(DealStageHistory)
         .where(DealStageHistory.deal_id == deal_id)
-        .order_by(DealStageHistory.created_at.asc())
+        .order_by(DealStageHistory.created_at.asc(), DealStageHistory.id.asc())
     )
     result = await db.execute(query)
     return list(result.scalars().all())
