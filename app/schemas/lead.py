@@ -7,7 +7,7 @@ from app.schemas.base import ORMBase
 
 from app.models.enums import LeadSource, LeadStatus, LeadTier
 from app.schemas.lead_activity import LeadActivityDetailRead
-from app.schemas.validators import validate_linkedin_url
+from app.schemas.validators import validate_linkedin_url, validate_phone
 
 
 class LeadContactInput(BaseModel):
@@ -15,6 +15,8 @@ class LeadContactInput(BaseModel):
 
     email: EmailStr | None = None
     phone: str | None = None
+
+    _validate_phone = field_validator("phone")(validate_phone)
 
     @model_validator(mode="after")
     def _require_email_or_phone(self) -> "LeadContactInput":
@@ -53,6 +55,7 @@ class LeadUpsert(BaseModel):
     contacts: list[LeadContactInput] = []
 
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
+    _validate_phone = field_validator("phone")(validate_phone)
 
     @model_validator(mode="after")
     def _require_creation_fields_when_no_id(self) -> "LeadUpsert":
