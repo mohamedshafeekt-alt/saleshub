@@ -30,12 +30,18 @@ async def get_dashboard_route(
     # ponytail: sequential, not asyncio.gather — a single AsyncSession can't run concurrent queries
     return DashboardOverviewResponse(
         summary=await dashboard_service.get_summary(db, period=period, start_date=start_date, end_date=end_date),
-        funnel=await dashboard_service.get_funnel(db),
-        deal_distribution=await dashboard_service.get_deal_distribution(db),
-        leaderboard=await dashboard_service.get_leaderboard(db),
+        funnel=await dashboard_service.get_funnel(db, period=period, start_date=start_date, end_date=end_date),
+        deal_distribution=await dashboard_service.get_deal_distribution(
+            db, period=period, start_date=start_date, end_date=end_date
+        ),
+        leaderboard=await dashboard_service.get_leaderboard(db, period=period, start_date=start_date, end_date=end_date),
         drop_off_reasons=await dashboard_service.get_drop_off_reasons(
             db, period=period, start_date=start_date, end_date=end_date
         ),
-        conversion_trend=await dashboard_service.get_conversion_trend(db, granularity=granularity),
-        activity_feed=await dashboard_service.get_activity_feed(db, limit=limit, offset=offset),
+        conversion_trend=await dashboard_service.get_conversion_trend(
+            db, granularity=granularity, period=period, start_date=start_date, end_date=end_date
+        ),
+        activity_feed=await dashboard_service.get_activity_feed(
+            db, period=period, start_date=start_date, end_date=end_date, limit=limit, offset=offset
+        ),
     )

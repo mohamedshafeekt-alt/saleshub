@@ -85,13 +85,17 @@ async def _count_leads(db: AsyncSession, lo: date, hi: date, *, qualified_only: 
     return result.scalar_one()
 
 
-async def _count_deals_in_pipeline(db: AsyncSession) -> int:
+async def _count_deals_in_pipeline(db: AsyncSession, lo: date, hi: date) -> int:
+    # "In pipeline" = still open (not cold/closed) AND opened during this period —
+    # deals opened earlier but still open today are out of scope for a period count.
     result = await db.execute(
         select(func.count(Deal.id))
         .join(DealStage, Deal.stage_id == DealStage.id)
         .where(
             DealStage.is_cold.is_(False),
             DealStage.name.not_in([CLOSED_WON_STAGE_NAME, CLOSED_LOST_STAGE_NAME]),
+            Deal.created_at >= lo,
+            Deal.created_at < hi + timedelta(days=1),
         )
     )
     return result.scalar_one()
@@ -113,8 +117,13 @@ async def _count_deals_closed(db: AsyncSession, lo: date, hi: date) -> int:
     return result.scalar_one()
 
 
-async def _count_accounts(db: AsyncSession) -> int:
-    result = await db.execute(select(func.count(Account.id)))
+async def _count_accounts(db: AsyncSession, lo: date, hi: date) -> int:
+    result = await db.execute(
+        select(func.count(Account.id)).where(
+            Account.created_at >= lo,
+            Account.created_at < hi + timedelta(days=1),
+        )
+    )
     return result.scalar_one()
 
 
@@ -132,34 +141,70 @@ async def get_summary(
     leads_prev = await _count_leads(db, prev_start, prev_end, qualified_only=False)
     qualified_now = await _count_leads(db, start, end, qualified_only=True)
     qualified_prev = await _count_leads(db, prev_start, prev_end, qualified_only=True)
-    pipeline_now = await _count_deals_in_pipeline(db)
+    pipeline_now = await _count_deals_in_pipeline(db, start, end)
+    pipeline_prev = await _count_deals_in_pipeline(db, prev_start, prev_end)
     closed_now = await _count_deals_closed(db, start, end)
     closed_prev = await _count_deals_closed(db, prev_start, prev_end)
-    accounts_now = await _count_accounts(db)
+    accounts_now = await _count_accounts(db, start, end)
+    accounts_prev = await _count_accounts(db, prev_start, prev_end)
 
     return DashboardSummary(
         leads_generated=DashboardTile(value=leads_now, change_pct=_change_pct(leads_now, leads_prev)),
         qualified_leads=DashboardTile(value=qualified_now, change_pct=_change_pct(qualified_now, qualified_prev)),
-        deals_in_pipeline=DashboardTile(value=pipeline_now, change_pct=None),
+        deals_in_pipeline=DashboardTile(value=pipeline_now, change_pct=_change_pct(pipeline_now, pipeline_prev)),
         deals_closed=DashboardTile(value=closed_now, change_pct=_change_pct(closed_now, closed_prev)),
-        num_accounts=DashboardTile(value=accounts_now, change_pct=None),
+        num_accounts=DashboardTile(value=accounts_now, change_pct=_change_pct(accounts_now, accounts_prev)),
     )
 
 
-async def get_funnel(db: AsyncSession) -> FunnelResponse:
+async def get_funnel(
+    db: AsyncSession,
+    *,
+    period: Period = "this_month",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> FunnelResponse:
+    # Counts deals that ENTERED each stage during the period (via
+    # DealStageHistory), matching Conversion Trend's semantics — not a
+    # snapshot of where deals currently sit. A deal that moved on to a
+    # later stage within the period still counts under the stage it
+    # passed through, not just its current one.
+    today = date.today()
+    start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
+    entries = (
+        select(DealStageHistory.id, DealStageHistory.to_stage_id)
+        .where(
+            DealStageHistory.created_at >= start,
+            DealStageHistory.created_at < end + timedelta(days=1),
+        )
+        .subquery()
+    )
     result = await db.execute(
-        select(DealStage.name, func.count(Deal.id))
-        .join(Deal, Deal.stage_id == DealStage.id, isouter=True)
+        select(DealStage.name, func.count(entries.c.id))
+        .select_from(DealStage)
+        .join(entries, entries.c.to_stage_id == DealStage.id, isouter=True)
         .group_by(DealStage.id, DealStage.name, DealStage.sort_order)
         .order_by(DealStage.sort_order)
     )
     return FunnelResponse(stages=[FunnelStage(stage_name=name, count=count) for name, count in result.all()])
 
 
-async def get_deal_distribution(db: AsyncSession) -> DealDistributionResponse:
+async def get_deal_distribution(
+    db: AsyncSession,
+    *,
+    period: Period = "this_month",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> DealDistributionResponse:
+    today = date.today()
+    start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
     result = await db.execute(
         select(Deal.tier, func.count(Deal.id), func.coalesce(func.sum(Deal.value), 0))
-        .where(Deal.tier.is_not(None))
+        .where(
+            Deal.tier.is_not(None),
+            Deal.created_at >= start,
+            Deal.created_at < end + timedelta(days=1),
+        )
         .group_by(Deal.tier)
     )
     return DealDistributionResponse(
@@ -170,7 +215,16 @@ async def get_deal_distribution(db: AsyncSession) -> DealDistributionResponse:
     )
 
 
-async def get_leaderboard(db: AsyncSession) -> LeaderboardResponse:
+async def get_leaderboard(
+    db: AsyncSession,
+    *,
+    period: Period = "this_month",
+    start_date: date | None = None,
+    end_date: date | None = None,
+) -> LeaderboardResponse:
+    # ponytail: same updated_at-as-closed-timestamp stand-in as _count_deals_closed.
+    today = date.today()
+    start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
     result = await db.execute(
         select(
             User.id,
@@ -181,7 +235,11 @@ async def get_leaderboard(db: AsyncSession) -> LeaderboardResponse:
         )
         .join(Deal, Deal.owner_id == User.id)
         .join(DealStage, Deal.stage_id == DealStage.id)
-        .where(DealStage.name == CLOSED_WON_STAGE_NAME)
+        .where(
+            DealStage.name == CLOSED_WON_STAGE_NAME,
+            Deal.updated_at >= start,
+            Deal.updated_at < end + timedelta(days=1),
+        )
         .group_by(User.id, User.first_name, User.last_name)
         .order_by(func.sum(Deal.value).desc())
     )
@@ -279,12 +337,23 @@ async def get_drop_off_reasons(
 
 
 async def get_conversion_trend(
-    db: AsyncSession, *, granularity: Literal["daily", "weekly", "monthly"] = "monthly"
+    db: AsyncSession,
+    *,
+    granularity: Literal["daily", "weekly", "monthly"] = "monthly",
+    period: Period = "this_month",
+    start_date: date | None = None,
+    end_date: date | None = None,
 ) -> ConversionTrendResponse:
+    today = date.today()
+    start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
     period_col = func.date_trunc(_TRUNC_UNIT[granularity], DealStageHistory.created_at)
     result = await db.execute(
         select(period_col, DealStage.name, func.count(DealStageHistory.id))
         .join(DealStage, DealStageHistory.to_stage_id == DealStage.id)
+        .where(
+            DealStageHistory.created_at >= start,
+            DealStageHistory.created_at < end + timedelta(days=1),
+        )
         .group_by(period_col, DealStage.name)
         .order_by(period_col)
     )
@@ -296,19 +365,52 @@ async def get_conversion_trend(
     )
 
 
-async def get_activity_feed(db: AsyncSession, *, limit: int = 20, offset: int = 0) -> ActivityFeedResponse:
+async def get_activity_feed(
+    db: AsyncSession,
+    *,
+    period: Period = "this_month",
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int = 20,
+    offset: int = 0,
+) -> ActivityFeedResponse:
+    today = date.today()
+    start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
+    lo, hi = start, end + timedelta(days=1)
+
     deal_rows = (
-        (await db.execute(select(DealActivity).order_by(DealActivity.created_at.desc()).limit(limit + offset)))
+        (
+            await db.execute(
+                select(DealActivity)
+                .where(DealActivity.created_at >= lo, DealActivity.created_at < hi)
+                .order_by(DealActivity.created_at.desc())
+                .limit(limit + offset)
+            )
+        )
         .scalars()
         .all()
     )
     lead_rows = (
-        (await db.execute(select(LeadActivity).order_by(LeadActivity.created_at.desc()).limit(limit + offset)))
+        (
+            await db.execute(
+                select(LeadActivity)
+                .where(LeadActivity.created_at >= lo, LeadActivity.created_at < hi)
+                .order_by(LeadActivity.created_at.desc())
+                .limit(limit + offset)
+            )
+        )
         .scalars()
         .all()
     )
     account_rows = (
-        (await db.execute(select(AccountActivity).order_by(AccountActivity.created_at.desc()).limit(limit + offset)))
+        (
+            await db.execute(
+                select(AccountActivity)
+                .where(AccountActivity.created_at >= lo, AccountActivity.created_at < hi)
+                .order_by(AccountActivity.created_at.desc())
+                .limit(limit + offset)
+            )
+        )
         .scalars()
         .all()
     )
