@@ -42,6 +42,7 @@ class Lead(Base):
     next_follow_up_date: Mapped[date | None] = mapped_column(nullable=True)
     follow_up_note: Mapped[str | None] = mapped_column(nullable=True)
     is_converted: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
+    is_favourite: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
 
     # Eager (joined) since every list/get response needs the owner's display
     # name; contacts/activities stay lazy since only the single-lead detail

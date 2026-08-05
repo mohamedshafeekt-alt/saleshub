@@ -433,7 +433,7 @@ async def get_activity_feed(
             ActivityFeedEntry(
                 entity_type="lead",
                 entity_id=a.lead_id,
-                type=a.type.value,
+                type=a.type.value if a.type else "system",
                 note=a.note,
                 created_by_name=a.created_by_name,
                 created_at=a.created_at,
