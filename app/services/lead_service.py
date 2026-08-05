@@ -160,6 +160,7 @@ async def export_leads(
     db: AsyncSession,
     *,
     requester: User,
+    owner_id: int | None = None,
     source: LeadSource | None = None,
     status: LeadStatus | None = None,
     search: str | None = None,
@@ -169,6 +170,8 @@ async def export_leads(
     filters: list[ColumnElement[bool]] = [Lead.is_converted.is_(False)]
     if LEADS_VIEW_ALL not in requester.permission_codes:
         filters.append(or_(Lead.owner_id == requester.id, Lead.owner_id.is_(None)))
+    if owner_id is not None:
+        filters.append(Lead.owner_id == owner_id)
     if source is not None:
         filters.append(Lead.source == source)
     if status is not None:

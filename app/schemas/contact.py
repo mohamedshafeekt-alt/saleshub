@@ -9,7 +9,7 @@ from datetime import datetime
 from pydantic import BaseModel, EmailStr, field_validator
 from app.schemas.base import ORMBase
 
-from app.schemas.validators import validate_linkedin_url
+from app.schemas.validators import validate_linkedin_url, validate_phone
 
 from app.models.enums import LeadTier
 
@@ -24,6 +24,8 @@ class ContactCreate(BaseModel):
     linkedin_url: str | None = None
 
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
+    _validate_phone = field_validator("phone")(validate_phone)
+    _validate_alternate_phone = field_validator("alternate_phone")(validate_phone)
 
 
 class ContactUpdate(BaseModel):
@@ -36,6 +38,8 @@ class ContactUpdate(BaseModel):
     linkedin_url: str | None = None
 
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
+    _validate_phone = field_validator("phone")(validate_phone)
+    _validate_alternate_phone = field_validator("alternate_phone")(validate_phone)
 
 
 class ContactRead(ORMBase):

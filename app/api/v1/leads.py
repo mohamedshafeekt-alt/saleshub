@@ -91,7 +91,9 @@ async def list_leads_route(
     db: AsyncSession = Depends(get_db),
 ) -> Page[LeadRead] | StreamingResponse:
     if to_export:
-        rows = await export_leads(db, requester=current_user, source=source, status=lead_status, search=search)
+        rows = await export_leads(
+            db, requester=current_user, owner_id=owner_id, source=source, status=lead_status, search=search
+        )
         buffer = rows_to_xlsx(
             ["Name", "Email", "Phone", "Company", "Source", "Status", "Owner"],
             [

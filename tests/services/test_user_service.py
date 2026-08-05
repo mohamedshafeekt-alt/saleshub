@@ -13,6 +13,7 @@ from app.services.user_service import (
     IncorrectPasswordError,
     UnsupportedImageTypeError,
     UserNotFoundError,
+    activate_user,
     change_password,
     create_user,
     list_users,
@@ -156,12 +157,39 @@ async def test_soft_delete_user_missing_id_raises_not_found(db_session: AsyncSes
         await soft_delete_user(db_session, 999_999, actor_id=user.id)
 
 
-async def test_soft_delete_user_already_deleted_raises_not_found(db_session: AsyncSession):
+async def test_soft_delete_user_already_deactivated_is_noop(db_session: AsyncSession):
     user = await _make_user(db_session, "already-deleted@example.com")
     await soft_delete_user(db_session, user.id, actor_id=user.id)
 
+    await soft_delete_user(db_session, user.id, actor_id=user.id)
+
+    await db_session.refresh(user)
+    assert user.is_active is False
+
+
+async def test_activate_user_sets_is_active_true(db_session: AsyncSession):
+    user = await _make_user(db_session, "reactivate-target@example.com")
+    await soft_delete_user(db_session, user.id, actor_id=user.id)
+
+    await activate_user(db_session, user.id, actor_id=user.id)
+
+    await db_session.refresh(user)
+    assert user.is_active is True
+
+
+async def test_activate_user_already_active_is_noop(db_session: AsyncSession):
+    user = await _make_user(db_session, "already-active@example.com")
+
+    await activate_user(db_session, user.id, actor_id=user.id)
+
+    await db_session.refresh(user)
+    assert user.is_active is True
+
+
+async def test_activate_user_missing_id_raises_not_found(db_session: AsyncSession):
+    user = await _make_user(db_session, "acting-user-missing-id-activate@example.com")
     with pytest.raises(UserNotFoundError):
-        await soft_delete_user(db_session, user.id, actor_id=user.id)
+        await activate_user(db_session, 999_999, actor_id=user.id)
 
 
 async def test_list_users_includes_deactivated_by_default(db_session: AsyncSession):
@@ -355,5 +383,24 @@ async def test_soft_delete_user_writes_audit_log(db_session, make_user):
 
     result = await db_session.execute(
         select(AuditLog).where(AuditLog.table_name == "users", AuditLog.record_id == target_id, AuditLog.action == "deactivated")
+    )
+    assert result.scalar_one() is not None
+
+
+async def test_activate_user_writes_audit_log(db_session, make_user):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+    from app.services.user_service import activate_user, soft_delete_user
+    from tests.support.roles import UserRole
+
+    admin = await make_user(email="user-audit-admin3@example.com", role=UserRole.ADMIN)
+    target = await make_user(email="user-audit-activate-target@example.com")
+    target_id = target.id
+    await soft_delete_user(db_session, target_id, actor_id=admin.id)
+    await activate_user(db_session, target_id, actor_id=admin.id)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "users", AuditLog.record_id == target_id, AuditLog.action == "activated")
     )
     assert result.scalar_one() is not None

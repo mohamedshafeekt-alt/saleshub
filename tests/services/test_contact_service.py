@@ -57,15 +57,15 @@ async def test_create_contact_with_linkedin_and_alternate_phone(db_session: Asyn
         first_name="Jane",
         email="jane-linkedin@example.com",
         linkedin_url="https://linkedin.com/in/jane",
-        phone="555-0001",
-        alternate_phone="555-0002",
+        phone="555-000-0001",
+        alternate_phone="555-000-0002",
     )
 
     contact = await create_contact(db_session, data, requester=actor)
 
     assert contact.linkedin_url == "https://linkedin.com/in/jane"
-    assert contact.phone == "555-0001"
-    assert contact.alternate_phone == "555-0002"
+    assert contact.phone == "5550000001"
+    assert contact.alternate_phone == "5550000002"
 
 
 async def test_create_contact_raises_duplicate_email_for_existing_email(db_session: AsyncSession):

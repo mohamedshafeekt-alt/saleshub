@@ -112,7 +112,7 @@ async def test_create_lead_inserts_primary_contact_into_lead_contacts(db_session
 
     assert len(contacts) == 1
     assert contacts[0].email == "primary-contact@acme.com"
-    assert contacts[0].phone == "+1-555-0100"
+    assert contacts[0].phone == "+15550100"
 
 
 async def test_create_lead_inserts_extra_contacts_alongside_primary(db_session: AsyncSession):

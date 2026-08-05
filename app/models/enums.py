@@ -72,3 +72,4 @@ class AuditAction(str, enum.Enum):
     LOGIN = "login"
     LOGOUT = "logout"
     DEACTIVATED = "deactivated"
+    ACTIVATED = "activated"

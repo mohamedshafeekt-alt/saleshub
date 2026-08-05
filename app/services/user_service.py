@@ -128,11 +128,14 @@ async def list_users(
 
 async def soft_delete_user(db: AsyncSession, user_id: int, actor_id: int) -> None:
     result = await db.execute(
-        select(User).where(User.id == user_id, User.is_delete.is_(False), User.is_active.is_(True))
+        select(User).where(User.id == user_id, User.is_delete.is_(False))
     )
     user = result.scalar_one_or_none()
     if user is None:
         raise UserNotFoundError(f"User not found: {user_id}")
+
+    if not user.is_active:
+        return
 
     email = user.email
     user.is_active = False
@@ -140,6 +143,26 @@ async def soft_delete_user(db: AsyncSession, user_id: int, actor_id: int) -> Non
     await log_audit(
         db, table_name="users", record_id=user_id, action=AuditAction.DEACTIVATED,
         actor_id=actor_id, description=f"User '{email}' deactivated",
+    )
+
+
+async def activate_user(db: AsyncSession, user_id: int, actor_id: int) -> None:
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.is_delete.is_(False))
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise UserNotFoundError(f"User not found: {user_id}")
+
+    if user.is_active:
+        return
+
+    email = user.email
+    user.is_active = True
+    await db.flush()
+    await log_audit(
+        db, table_name="users", record_id=user_id, action=AuditAction.ACTIVATED,
+        actor_id=actor_id, description=f"User '{email}' activated",
     )
 
 class IncorrectPasswordError(Exception):

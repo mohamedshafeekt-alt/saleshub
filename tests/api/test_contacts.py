@@ -76,14 +76,14 @@ async def test_create_contact_with_linkedin_and_alternate_phone_returns_201(
 
     response = await client.post(
         CONTACTS_URL,
-        json=_contact_payload(linkedin_url="https://linkedin.com/in/jane", alternate_phone="555-0002"),
+        json=_contact_payload(linkedin_url="https://linkedin.com/in/jane", alternate_phone="555-000-0002"),
         headers=headers,
     )
 
     assert response.status_code == 201
     body = response.json()
     assert body["linkedin_url"] == "https://linkedin.com/in/jane"
-    assert body["alternate_phone"] == "555-0002"
+    assert body["alternate_phone"] == "5550000002"
 
 
 async def test_create_contact_returns_409_when_email_already_exists(
