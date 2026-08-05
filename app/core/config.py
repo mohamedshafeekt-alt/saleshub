@@ -1,5 +1,6 @@
 import json
 import os
+from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -20,6 +21,11 @@ class Settings(BaseSettings):
     smtp_from_address: str
     log_level: str = "INFO"
     frontend_base_url: str = "http://localhost:40843"
+    storage_backend: Literal["local", "s3"] = "local"
+    aws_region: str = ""
+    s3_bucket_name: str = ""
+    aws_access_key_id: str = ""
+    aws_secret_access_key: str = ""
 
 
 load_dotenv()

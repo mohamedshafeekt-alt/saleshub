@@ -8,6 +8,7 @@ and never touch each other.
 import os
 from collections.abc import AsyncGenerator
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -16,6 +17,50 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
 from app.db.base import Base
+from app.services import account_document_service, deal_document_service, user_service
+from app.services.file_upload_service import FileUploadService
+
+# Real infra safety net: whatever storage_backend the running environment's
+# .env has configured, tests must never touch real S3 unless they explicitly
+# mock boto3 (see tests/services/test_s3_storage_service.py). Each of these
+# module-level singletons is bound once at import time from settings, so it
+# has to be re-pinned to a local instance per test rather than toggled via
+# settings after the fact.
+_LOCAL_STORAGE_SPECS = [
+    (user_service, "_avatar_upload_service", Path("media/avatars"), {"image/png": ".png", "image/jpeg": ".jpg"}),
+    (
+        deal_document_service,
+        "_deal_document_upload_service",
+        Path("media/deal_documents"),
+        {
+            "application/pdf": ".pdf",
+            "application/msword": ".doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+        },
+    ),
+    (
+        account_document_service,
+        "_account_document_upload_service",
+        Path("media/account_documents"),
+        {
+            "application/pdf": ".pdf",
+            "application/msword": ".doc",
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+            "image/png": ".png",
+            "image/jpeg": ".jpg",
+        },
+    ),
+]
+
+
+@pytest.fixture(autouse=True)
+def _force_local_storage_backends(monkeypatch):
+    for module, attr_name, base_dir, allowed_content_types in _LOCAL_STORAGE_SPECS:
+        monkeypatch.setattr(
+            module, attr_name, FileUploadService(base_dir=base_dir, allowed_content_types=allowed_content_types)
+        )
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",

@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.deal_document import DealDocument
 from app.models.user import User
 from app.services.deal_service import get_deal
-from app.services.file_upload_service import FileUploadService
+from app.services.storage import get_storage_service
 
 __all__ = [
     "DealDocumentNotFoundError",
@@ -25,7 +25,7 @@ __all__ = [
 # B2B sales CRM: deal documents are proposals/NDAs/contracts (per the UI
 # mockup), so beyond images this needs PDFs and Word docs -- a broader set
 # than the avatar upload's images-only allowlist.
-_deal_document_upload_service = FileUploadService(
+_deal_document_upload_service = get_storage_service(
     base_dir=Path("media/deal_documents"),
     allowed_content_types={
         "application/pdf": ".pdf",
