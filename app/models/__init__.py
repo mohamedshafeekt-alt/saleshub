@@ -17,6 +17,7 @@ from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.models.lead_contact import LeadContact
 from app.models.notification import Notification
+from app.models.password_reset_token import PasswordResetToken
 from app.models.permission import Permission
 from app.models.refresh_token import RefreshToken
 from app.models.role import Role
@@ -40,6 +41,7 @@ __all__ = [
     "LeadActivity",
     "LeadContact",
     "Notification",
+    "PasswordResetToken",
     "Permission",
     "RefreshToken",
     "Role",

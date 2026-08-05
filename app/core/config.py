@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     smtp_password: str
     smtp_from_address: str
     log_level: str = "INFO"
+    frontend_base_url: str = "http://localhost:40843"
 
 
 load_dotenv()

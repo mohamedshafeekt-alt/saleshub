@@ -1,5 +1,6 @@
-"""POST /api/v1/auth/login, /auth/refresh, /auth/logout."""
+"""POST /api/v1/auth/login, /auth/refresh, /auth/logout, /auth/forgot-password, /auth/reset-password."""
 
+import pytest_asyncio
 from httpx import AsyncClient
 
 from tests.support.roles import UserRole
@@ -7,6 +8,8 @@ from tests.support.roles import UserRole
 LOGIN_URL = "/api/v1/auth/login"
 REFRESH_URL = "/api/v1/auth/refresh"
 LOGOUT_URL = "/api/v1/auth/logout"
+FORGOT_PASSWORD_URL = "/api/v1/auth/forgot-password"
+RESET_PASSWORD_URL = "/api/v1/auth/reset-password"
 
 
 async def test_login_correct_credentials_returns_token(client: AsyncClient, make_user):
@@ -134,3 +137,68 @@ async def test_logout_without_auth_header_returns_401(client: AsyncClient):
     response = await client.post(LOGOUT_URL, json={"refresh_token": "whatever"})
 
     assert response.status_code == 401
+
+
+class FakeEmailSender:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
+    async def send(self, to: str, subject: str, body: str) -> None:
+        self.calls.append({"to": to, "subject": subject, "body": body})
+
+
+@pytest_asyncio.fixture
+async def fake_email_sender(client: AsyncClient):
+    from app.core.deps import get_email_sender
+    from app.main import app
+
+    fake = FakeEmailSender()
+    app.dependency_overrides[get_email_sender] = lambda: fake
+    yield fake
+
+
+async def test_forgot_password_known_email_returns_204_and_sends_email(
+    client: AsyncClient, make_user, fake_email_sender
+):
+    await make_user(email="forgot-route@example.com", password="correct-password", role=UserRole.SALES_REP)
+
+    response = await client.post(FORGOT_PASSWORD_URL, json={"email": "forgot-route@example.com"})
+
+    assert response.status_code == 204
+    assert len(fake_email_sender.calls) == 1
+    assert fake_email_sender.calls[0]["to"] == "forgot-route@example.com"
+
+
+async def test_forgot_password_unknown_email_returns_204_and_sends_nothing(
+    client: AsyncClient, fake_email_sender
+):
+    response = await client.post(FORGOT_PASSWORD_URL, json={"email": "nobody-here@example.com"})
+
+    assert response.status_code == 204
+    assert fake_email_sender.calls == []
+
+
+async def test_reset_password_with_valid_token_returns_204_and_allows_login_with_new_password(
+    client: AsyncClient, make_user, fake_email_sender
+):
+    await make_user(email="reset-route@example.com", password="old-password", role=UserRole.SALES_REP)
+    await client.post(FORGOT_PASSWORD_URL, json={"email": "reset-route@example.com"})
+    reset_token = fake_email_sender.calls[0]["body"].split("?token=")[1].split("\n")[0]
+
+    response = await client.post(
+        RESET_PASSWORD_URL, json={"token": reset_token, "new_password": "new-password"}
+    )
+
+    assert response.status_code == 204
+    login_response = await client.post(
+        LOGIN_URL, json={"email": "reset-route@example.com", "password": "new-password"}
+    )
+    assert login_response.status_code == 200
+
+
+async def test_reset_password_with_unknown_token_returns_400(client: AsyncClient):
+    response = await client.post(
+        RESET_PASSWORD_URL, json={"token": "not-a-real-token", "new_password": "whatever"}
+    )
+
+    assert response.status_code == 400
