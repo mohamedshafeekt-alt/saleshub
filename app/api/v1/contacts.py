@@ -242,14 +242,14 @@ async def get_contact_route(
     }
     deals = await list_deals_for_contact(db, contact_id)
     deal_rows = [
-        [deal.deal_name, deal.value, deal.currency, deal.stage_id,
+        [deal.deal_name, deal.value, deal.currency, deal.stage_name,
          deal.tier.value if deal.tier else None, deal.owner_id, deal.expected_close_date]
         for deal in deals
     ]
     buffer = sheets_to_xlsx(
         [
             field_value_sheet("Contact", contact_fields),
-            ("Deals", ["Deal Name", "Value", "Currency", "Stage ID", "Tier", "Owner ID", "Expected Close Date"], deal_rows),
+            ("Deals", ["Deal Name", "Value", "Currency", "Stage", "Tier", "Owner ID", "Expected Close Date"], deal_rows),
         ]
     )
     return StreamingResponse(

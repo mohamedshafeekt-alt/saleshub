@@ -60,6 +60,10 @@ class DealRead(ORMBase):
     tier: LeadTier | None
     cold_reason: str | None
     owner_id: int
+    account_name: str
+    owner_name: str
+    stage_name: str
+    stage_is_cold: bool
 
 
 class DealStageHistoryRead(ORMBase):
@@ -68,6 +72,8 @@ class DealStageHistoryRead(ORMBase):
     deal_id: int
     from_stage_id: int | None
     to_stage_id: int
+    from_stage_name: str | None
+    to_stage_name: str
     changed_by: int
     changed_by_name: str
     note: str | None

@@ -176,7 +176,7 @@ async def get_account_route(
         for ca in account.contact_accounts
     ]
     deal_rows = [
-        [deal.deal_name, deal.value, deal.currency, deal.stage_id,
+        [deal.deal_name, deal.value, deal.currency, deal.stage_name,
          deal.tier.value if deal.tier else None, deal.owner_id, deal.expected_close_date]
         for deal in account.deals
     ]
@@ -184,7 +184,7 @@ async def get_account_route(
         [
             field_value_sheet("Account", account_fields),
             ("Contacts", ["First Name", "Last Name", "Email", "Phone", "Job Title", "Primary"], contact_rows),
-            ("Deals", ["Deal Name", "Value", "Currency", "Stage ID", "Tier", "Owner ID", "Expected Close Date"], deal_rows),
+            ("Deals", ["Deal Name", "Value", "Currency", "Stage", "Tier", "Owner ID", "Expected Close Date"], deal_rows),
         ]
     )
     return StreamingResponse(

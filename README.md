@@ -86,6 +86,7 @@ _(updated after every feature — do not batch these)_
 
 
 - [x] Forgot Password — `POST /api/v1/auth/forgot-password` (always 204, no user enumeration) emails a single-use, 1-hour reset token to the account if it exists and is active; `POST /api/v1/auth/reset-password` (token + new_password) updates the password and revokes every other active refresh token, forcing re-login elsewhere. New `password_reset_tokens` table, mirrors `refresh_tokens`' shape. Email currently carries the raw token (no frontend reset-page URL exists yet to link to)
+- [x] Backend-changes-required cleanup: `GET /dashboard?period=custom` now `422`s on `end_date < start_date`. `DealRead` gains `account_name`/`owner_name`/`stage_name`/`stage_is_cold` (eager-joined `Deal.account`/`.stage`/`.owner`, same pattern as `DealStageHistory.changed_by_user`) so Kanban cards and the deals list/board no longer need three client-side N+1 lookups. `DealStageHistoryRead` gains `from_stage_name`/`to_stage_name`. Single-deal export's "Stage History" sheet and the Account/Contact exports' "Deals" sheet now write the stage name instead of the raw `stage_id` (deals-list export already did). `tier` is now repeatable (`?tier=gold&tier=silver`) on both `GET /deals` and its export. (`leaderboard[].owner_avatar_url` intentionally deferred — not requested this round)
 - [ ] Static Pre-Sales Checklist per deal
 - [ ] Activity log for Account (Lead's and Deal's are done; Account's is still open)
 - [ ] Dashboard aggregation endpoints (funnel, target vs actual)

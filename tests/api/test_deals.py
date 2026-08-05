@@ -312,6 +312,51 @@ async def test_list_deals_filters_by_tier(
     assert [deal["id"] for deal in response.json()["items"]] == [gold_deal.id]
 
 
+async def test_list_deals_filters_by_repeated_tier(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    rep = await make_user(email="rep-filter-multi-tier-deal@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Filter Multi Tier Deal Co")
+    gold_deal = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Multi Gold Deal", tier=LeadTier.GOLD
+    )
+    silver_deal = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Multi Silver Deal", tier=LeadTier.SILVER
+    )
+    await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Multi Bronze Deal", tier=LeadTier.BRONZE
+    )
+    headers = auth_headers(rep)
+
+    response = await client.get(
+        DEALS_URL, params={"tier": ["gold", "silver"]}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert {deal["id"] for deal in response.json()["items"]} == {gold_deal.id, silver_deal.id}
+
+
+async def test_get_deal_includes_display_names(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    owner = await make_user(email="rep-names-deal@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Names Deal Co")
+    stage = await make_deal_stage(name="Names Deal Stage", is_cold=False)
+    deal = await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Names Deal", stage_id=stage.id
+    )
+    headers = auth_headers(owner)
+
+    response = await client.get(f"{DEALS_URL}/{deal.id}", headers=headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["account_name"] == "Names Deal Co"
+    assert body["owner_name"] == owner.first_name
+    assert body["stage_name"] == "Names Deal Stage"
+    assert body["stage_is_cold"] is False
+
+
 async def test_list_deals_filters_by_search_matches_deal_name_or_account(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal
 ):
@@ -719,6 +764,32 @@ async def test_get_deal_to_export_returns_deal_and_stage_history_sheets(
     deal_sheet = workbook["Deal"]
     field_col = [cell.value for cell in deal_sheet["A"]]
     assert "Deal Name" in field_col
+
+
+async def test_get_deal_to_export_stage_history_sheet_writes_stage_names(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    owner = await make_user(email="rep-export-history-names@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Export History Names Co")
+    stage_1 = await make_deal_stage(name="Export History Stage 1")
+    stage_2 = await make_deal_stage(name="Export History Stage 2")
+    deal = await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Export History Names Deal", stage_id=stage_1.id
+    )
+    headers = auth_headers(owner)
+    await client.patch(f"{DEALS_URL}/{deal.id}", json={"stage_id": stage_2.id}, headers=headers)
+
+    response = await client.get(f"{DEALS_URL}/{deal.id}", params={"to_export": "true"}, headers=headers)
+
+    assert response.status_code == 200
+    import io
+
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    history_sheet = workbook["Stage History"]
+    header_row = [cell.value for cell in next(history_sheet.iter_rows(min_row=1, max_row=1))]
+    assert header_row[:2] == ["From Stage", "To Stage"]
+    data_row = [cell.value for cell in next(history_sheet.iter_rows(min_row=2, max_row=2))]
+    assert data_row[:2] == ["Export History Stage 1", "Export History Stage 2"]
 
 
 # --- PATCH /deals/generic-patch ------------------------------------------

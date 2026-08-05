@@ -146,7 +146,7 @@ def _deal_filters(
     owner_id: int | None,
     account_id: int | None,
     stage_id: int | None,
-    tier: LeadTier | None,
+    tier: list[LeadTier] | None,
     search: str | None,
 ) -> tuple[list[Any], int | None, bool]:
     if DEALS_VIEW_ALL not in requester.permission_codes:
@@ -159,8 +159,8 @@ def _deal_filters(
         filters.append(Deal.account_id == account_id)
     if stage_id is not None:
         filters.append(Deal.stage_id == stage_id)
-    if tier is not None:
-        filters.append(Deal.tier == tier)
+    if tier:
+        filters.append(Deal.tier.in_(tier))
 
     needs_account_join = search is not None
     if search is not None:
@@ -182,7 +182,7 @@ async def list_deals(
     owner_id: int | None = None,
     account_id: int | None = None,
     stage_id: int | None = None,
-    tier: LeadTier | None = None,
+    tier: list[LeadTier] | None = None,
     search: str | None = None,
     sort_by: SortBy = "created_at",
     sort_dir: SortDir = "desc",
@@ -221,7 +221,7 @@ async def list_deals_board(
     owner_id: int | None = None,
     account_id: int | None = None,
     stage_id: int | None = None,
-    tier: LeadTier | None = None,
+    tier: list[LeadTier] | None = None,
     search: str | None = None,
     sort_by: SortBy = "created_at",
     sort_dir: SortDir = "desc",
@@ -387,7 +387,7 @@ async def export_deals(
     requester: User,
     owner_id: int | None = None,
     stage_id: int | None = None,
-    tier: LeadTier | None = None,
+    tier: list[LeadTier] | None = None,
     search: str | None = None,
 ) -> list[dict[str, Any]]:
     """All deals matching the requester's role-scoping, ignoring any

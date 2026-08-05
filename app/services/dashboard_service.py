@@ -57,6 +57,8 @@ def _period_bounds(
     if period == "custom":
         if start_date is None or end_date is None:
             raise ValueError("start_date and end_date are required when period='custom'")
+        if end_date < start_date:
+            raise ValueError("end_date must not be before start_date")
         start, end = start_date, end_date
     elif period == "this_week":
         start, end = today - timedelta(days=today.weekday()), today
