@@ -80,6 +80,18 @@ async def test_dashboard_period_rejects_today_and_requires_range_for_custom(
     assert (await client.get("/api/v1/dashboard?period=custom", headers=headers)).status_code == 422
 
 
+async def test_dashboard_custom_period_rejects_end_date_before_start_date(
+    client: AsyncClient, make_user, auth_headers
+):
+    user = await make_user(email="reversed-range@example.com", role=UserRole.SALES_MANAGER)
+    headers = auth_headers(user)
+
+    response = await client.get(
+        "/api/v1/dashboard?period=custom&start_date=2026-02-01&end_date=2026-01-01", headers=headers
+    )
+    assert response.status_code == 422
+
+
 async def test_dashboard_custom_period_scopes_leads_to_given_range(
     client: AsyncClient, make_user, auth_headers, make_lead, db_session
 ):

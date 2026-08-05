@@ -28,6 +28,8 @@ async def get_dashboard_route(
 ) -> DashboardOverviewResponse:
     if period == "custom" and (start_date is None or end_date is None):
         raise HTTPException(status_code=422, detail="start_date and end_date are required when period='custom'")
+    if period == "custom" and end_date < start_date:  # type: ignore[operator]
+        raise HTTPException(status_code=422, detail="end_date must not be before start_date")
 
     # ponytail: sequential, not asyncio.gather — a single AsyncSession can't run concurrent queries
     return DashboardOverviewResponse(

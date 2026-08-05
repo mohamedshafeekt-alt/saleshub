@@ -8,6 +8,7 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db.base import Base
 
 if TYPE_CHECKING:
+    from app.models.deal_stage import DealStage
     from app.models.user import User
 
 __all__ = ["DealStageHistory"]
@@ -25,7 +26,19 @@ class DealStageHistory(Base):
     note: Mapped[str | None] = mapped_column(nullable=True)
 
     changed_by_user: Mapped["User"] = relationship("User", lazy="joined", foreign_keys=[changed_by])
+    from_stage: Mapped["DealStage | None"] = relationship(
+        "DealStage", lazy="joined", foreign_keys=[from_stage_id]
+    )
+    to_stage: Mapped["DealStage"] = relationship("DealStage", lazy="joined", foreign_keys=[to_stage_id])
 
     @property
     def changed_by_name(self) -> str:
         return " ".join(filter(None, [self.changed_by_user.first_name, self.changed_by_user.last_name]))
+
+    @property
+    def from_stage_name(self) -> str | None:
+        return self.from_stage.name if self.from_stage is not None else None
+
+    @property
+    def to_stage_name(self) -> str:
+        return self.to_stage.name

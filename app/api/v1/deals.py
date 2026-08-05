@@ -137,7 +137,7 @@ async def list_deals_route(
     owner_id: int | None = Query(None),
     account_id: int | None = Query(None),
     stage_id: int | None = Query(None),
-    tier: LeadTier | None = Query(None),
+    tier: list[LeadTier] | None = Query(None),
     search: str | None = Query(None),
     sort_by: Literal["value", "expected_close_date", "created_at"] = Query("created_at"),
     sort_dir: Literal["asc", "desc"] = Query("desc"),
@@ -243,19 +243,19 @@ async def get_deal_route(
     deal_fields = {
         "ID": deal_read.id,
         "Deal Name": deal_read.deal_name,
-        "Account ID": deal_read.account_id,
+        "Account": deal_read.account_name,
         "Contacts": ", ".join(contact.name for contact in deal_read.contacts),
         "Value": deal_read.value,
         "Currency": deal_read.currency,
         "Expected Close Date": deal_read.expected_close_date,
-        "Stage ID": deal_read.stage_id,
+        "Stage": deal_read.stage_name,
         "Tier": deal_read.tier.value if deal_read.tier else None,
         "Cold Reason": deal_read.cold_reason,
-        "Owner ID": deal_read.owner_id,
+        "Owner": deal_read.owner_name,
     }
     history = await list_stage_history(db, deal_id, requester=current_user)
     history_rows = [
-        [row.from_stage_id, row.to_stage_id, row.changed_by, row.note, row.created_at]
+        [row.from_stage_name, row.to_stage_name, row.changed_by, row.note, row.created_at]
         for row in history
     ]
     buffer = sheets_to_xlsx(
@@ -263,7 +263,7 @@ async def get_deal_route(
             field_value_sheet("Deal", deal_fields),
             (
                 "Stage History",
-                ["From Stage ID", "To Stage ID", "Changed By", "Note", "Created At"],
+                ["From Stage", "To Stage", "Changed By", "Note", "Created At"],
                 history_rows,
             ),
         ]

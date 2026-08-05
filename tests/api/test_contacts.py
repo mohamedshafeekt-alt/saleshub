@@ -309,6 +309,32 @@ async def test_get_contact_to_export_returns_contact_and_deals_sheets(
     assert "Email" in field_col
 
 
+async def test_get_contact_to_export_deals_sheet_writes_stage_name(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact, make_deal, make_deal_stage
+):
+    owner = await make_user(email="rep-export-contact-stage-name@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Export Contact Stage Name Co")
+    contact = await make_contact(account_id=account.id, first_name="Stage", last_name="Name")
+    stage = await make_deal_stage(name="Export Contact Deal Stage")
+    await make_deal(
+        account_id=account.id, owner_id=owner.id, deal_name="Export Contact Stage Deal",
+        stage_id=stage.id, contact_ids=[contact.id],
+    )
+    headers = auth_headers(owner)
+
+    response = await client.get(
+        f"{CONTACTS_URL}/{contact.id}", params={"to_export": "true"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(response.content))
+    deals_sheet = workbook["Deals"]
+    header = [cell.value for cell in next(deals_sheet.iter_rows(min_row=1, max_row=1))]
+    assert header[3] == "Stage"
+    data_row = [cell.value for cell in next(deals_sheet.iter_rows(min_row=2, max_row=2))]
+    assert data_row[3] == "Export Contact Deal Stage"
+
+
 # --- GET /contacts/{id}/overview -----------------------------------------------
 
 
