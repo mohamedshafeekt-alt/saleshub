@@ -550,6 +550,26 @@ async def test_update_lead_partial_patch_returns_200(client: AsyncClient, make_u
     assert body["email"] == "patch-me@example.com"
 
 
+async def test_update_lead_sets_is_favourite_and_lists_it_first(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    owner = await make_user(email="rep-fav@example.com", role=UserRole.SALES_REP)
+    older_non_favourite = await make_lead(owner_id=owner.id, email="older-non-fav-api@example.com")
+    newer_lead = await make_lead(owner_id=owner.id, email="newer-fav-api@example.com")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        LEADS_URL, json={"id": newer_lead.id, "is_favourite": True}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_favourite"] is True
+
+    list_response = await client.get(LEADS_URL, headers=headers)
+    items = list_response.json()["items"]
+    assert [item["id"] for item in items] == [newer_lead.id, older_non_favourite.id]
+
+
 async def test_update_lead_returns_404_for_nonexistent_id(client: AsyncClient, make_user, auth_headers):
     rep = await make_user(email="rep-patch-404@example.com", role=UserRole.SALES_REP)
     headers = auth_headers(rep)

@@ -48,6 +48,7 @@ def _is_duplicate_email_violation(exc: IntegrityError) -> bool:
 async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSender, requester: User) -> Lead:
     lead_data = data.model_dump(exclude={"id", "contacts"})
     lead_data["status"] = lead_data["status"] or LeadStatus.NOT_CONTACTED
+    lead_data["is_favourite"] = lead_data["is_favourite"] or False
     lead = Lead(**lead_data)
     db.add(lead)
     try:
@@ -146,7 +147,7 @@ async def list_leads(
         select(Lead)
         .options(selectinload(Lead.owner))
         .where(*filters)
-        .order_by(Lead.created_at.desc())
+        .order_by(Lead.is_favourite.desc(), Lead.created_at.desc())
         .limit(limit)
         .offset(offset)
     )
@@ -254,6 +255,7 @@ async def get_lead_detail(db: AsyncSession, lead_id: int, requester: User) -> Le
 async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requester: User) -> Lead:
     lead = await _get_lead_or_raise(db, lead_id, requester)
     old_owner_id = lead.owner_id
+    old_is_favourite = lead.is_favourite
 
     updates = data.model_dump(exclude_unset=True, exclude={"id", "contacts"})
     for field, value in updates.items():
@@ -286,10 +288,22 @@ async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requeste
     # serialization) would raise MissingGreenlet. Refresh now, while still awaitable.
     await db.refresh(lead)
 
+    description = f"Lead '{f'{lead.first_name} {lead.last_name}'.strip()} at {lead.company}' updated"
+    if "is_favourite" in updates and updates["is_favourite"] != old_is_favourite:
+        description += " (marked as favourite)" if updates["is_favourite"] else " (removed from favourites)"
+        requester_name = " ".join(filter(None, [requester.first_name, requester.last_name]))
+        note = (
+            f"Lead marked as favourite by {requester_name}"
+            if updates["is_favourite"]
+            else f"Lead removed from favourites by {requester_name}"
+        )
+        db.add(LeadActivity(lead_id=lead.id, note=note, created_by=requester.id))
+        await db.flush()
+
     await log_audit(
         db, table_name="leads", record_id=lead.id, action=AuditAction.UPDATED,
         actor_id=requester.id,
-        description=f"Lead '{f'{lead.first_name} {lead.last_name}'.strip()} at {lead.company}' updated",
+        description=description,
     )
 
     return lead

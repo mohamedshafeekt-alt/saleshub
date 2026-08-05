@@ -24,7 +24,7 @@ class LeadActivityRead(ORMBase):
 
     id: int
     lead_id: int
-    type: LeadActivityType
+    type: LeadActivityType | None
     note: str
     created_by: int
     created_at: datetime

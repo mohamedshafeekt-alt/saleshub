@@ -305,6 +305,16 @@ async def test_list_leads_excludes_converted_leads(db_session: AsyncSession, mak
     assert open_lead.id in ids
 
 
+async def test_list_leads_orders_favourites_first(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-fav@example.com", UserRole.SALES_REP)
+    older_non_favourite = await make_lead(owner_id=owner.id, email="older-non-fav@example.com")
+    newer_favourite = await make_lead(owner_id=owner.id, email="newer-fav@example.com", is_favourite=True)
+
+    results, _total = await list_leads(db_session, requester=owner)
+
+    assert [lead.id for lead in results] == [newer_favourite.id, older_non_favourite.id]
+
+
 async def test_list_leads_manager_sees_all_when_no_owner_id_given(db_session: AsyncSession, make_lead):
     rep_a = await _make_user(db_session, "rep-c@example.com", UserRole.SALES_REP)
     rep_b = await _make_user(db_session, "rep-d@example.com", UserRole.SALES_REP)
@@ -432,6 +442,128 @@ async def test_update_lead_applies_partial_changes(db_session: AsyncSession, mak
 
     assert updated.company == "New Co"
     assert updated.email == "partial-update@example.com"  # untouched field preserved
+
+
+async def test_update_lead_sets_is_favourite(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-upd-fav@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="favourite-me@example.com")
+
+    updated = await update_lead(
+        db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, is_favourite=True), requester=owner
+    )
+
+    assert updated.is_favourite is True
+
+
+async def test_update_lead_audits_favouriting_with_a_specific_description(
+    db_session: AsyncSession, make_lead
+):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    owner = await _make_user(db_session, "owner-audit-fav@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="audit-fav@example.com")
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, is_favourite=True), requester=owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "leads", AuditLog.record_id == lead.id)
+    )
+    assert "marked as favourite" in result.scalar_one().description
+
+
+async def test_update_lead_audits_unfavouriting_with_a_specific_description(
+    db_session: AsyncSession, make_lead
+):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    owner = await _make_user(db_session, "owner-audit-unfav@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="audit-unfav@example.com", is_favourite=True)
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, is_favourite=False), requester=owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "leads", AuditLog.record_id == lead.id)
+    )
+    assert "removed from favourites" in result.scalar_one().description
+
+
+async def test_update_lead_audit_description_stays_generic_without_favourite_change(
+    db_session: AsyncSession, make_lead
+):
+    from sqlalchemy import select
+    from app.models.audit_log import AuditLog
+
+    owner = await _make_user(db_session, "owner-audit-generic@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="audit-generic@example.com", company="Old Co")
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, company="New Co"), requester=owner)
+    await db_session.flush()
+
+    result = await db_session.execute(
+        select(AuditLog).where(AuditLog.table_name == "leads", AuditLog.record_id == lead.id)
+    )
+    description = result.scalar_one().description
+    assert "favourite" not in description
+    assert "updated" in description
+
+
+async def test_update_lead_favouriting_logs_a_lead_activity(db_session: AsyncSession, make_lead):
+    from app.models.lead_activity import LeadActivity
+
+    owner = await _make_user(db_session, "owner-activity-fav@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-fav@example.com")
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, is_favourite=True), requester=owner)
+
+    result = await db_session.execute(select(LeadActivity).where(LeadActivity.lead_id == lead.id))
+    activity = result.scalar_one()
+    assert activity.type is None
+    assert "marked as favourite" in activity.note
+    assert owner.first_name in activity.note
+
+
+async def test_update_lead_refavouriting_an_already_favourite_lead_is_a_no_op(
+    db_session: AsyncSession, make_lead
+):
+    from app.models.lead_activity import LeadActivity
+
+    owner = await _make_user(db_session, "owner-activity-refav@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-refav@example.com", is_favourite=True)
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, is_favourite=True), requester=owner)
+
+    result = await db_session.execute(select(LeadActivity).where(LeadActivity.lead_id == lead.id))
+    assert result.scalar_one_or_none() is None
+
+
+async def test_update_lead_unfavouriting_logs_a_lead_activity(db_session: AsyncSession, make_lead):
+    from app.models.lead_activity import LeadActivity
+
+    owner = await _make_user(db_session, "owner-activity-unfav@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-unfav@example.com", is_favourite=True)
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, is_favourite=False), requester=owner)
+
+    result = await db_session.execute(select(LeadActivity).where(LeadActivity.lead_id == lead.id))
+    assert "removed from favourites" in result.scalar_one().note
+
+
+async def test_update_lead_without_favourite_change_does_not_log_an_activity(
+    db_session: AsyncSession, make_lead
+):
+    from app.models.lead_activity import LeadActivity
+
+    owner = await _make_user(db_session, "owner-activity-none@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="activity-none@example.com", company="Old Co")
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, company="New Co"), requester=owner)
+
+    result = await db_session.execute(select(LeadActivity).where(LeadActivity.lead_id == lead.id))
+    assert result.scalar_one_or_none() is None
 
 
 async def test_update_lead_duplicate_email_raises(db_session: AsyncSession, make_lead):

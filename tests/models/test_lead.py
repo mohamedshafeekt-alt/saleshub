@@ -166,6 +166,25 @@ async def test_lead_status_defaults_to_not_contacted(db_session: AsyncSession):
     assert lead.status == LeadStatus.NOT_CONTACTED
 
 
+async def test_lead_is_favourite_defaults_to_false(db_session: AsyncSession):
+    from app.models.lead import Lead
+
+    owner = await _make_owner(db_session, email="owner-fav-default@example.com")
+
+    lead = Lead(
+        first_name="No",
+        company="Favourite Default Co",
+        email="favourite-default@example.com",
+        source=LeadSource.WEBSITE,
+        owner_id=owner.id,
+    )
+    db_session.add(lead)
+    await db_session.flush()
+    await db_session.refresh(lead)
+
+    assert lead.is_favourite is False
+
+
 async def test_source_is_required(db_session: AsyncSession):
     from app.models.lead import Lead
 

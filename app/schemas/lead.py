@@ -52,6 +52,7 @@ class LeadUpsert(BaseModel):
     owner_id: int | None = None
     next_follow_up_date: date | None = None
     follow_up_note: str | None = None
+    is_favourite: bool | None = None
     contacts: list[LeadContactInput] = []
 
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
@@ -93,6 +94,7 @@ class LeadRead(ORMBase):
     next_follow_up_date: date | None
     follow_up_note: str | None
     is_converted: bool
+    is_favourite: bool
     created_at: datetime
     updated_at: datetime
 

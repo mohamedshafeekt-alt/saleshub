@@ -203,7 +203,7 @@ async def get_lead_route(
         "Last Contact At": detail.last_contact_at,
     }
     activity_rows = [
-        [activity.type.value, activity.note, activity.created_by_name, activity.created_at]
+        [activity.type.value if activity.type else "system", activity.note, activity.created_by_name, activity.created_at]
         for activity in detail.activities
     ]
     buffer = sheets_to_xlsx(
