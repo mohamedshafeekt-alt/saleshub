@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.account_document import AccountDocument
 from app.models.user import User
 from app.services.account_service import get_account
-from app.services.file_upload_service import FileUploadService
+from app.services.storage import get_storage_service
 
 __all__ = [
     "AccountDocumentNotFoundError",
@@ -24,7 +24,7 @@ __all__ = [
 
 # Same broader allowlist as deal documents (proposals/NDAs/contracts, plus
 # images) rather than the avatar upload's images-only allowlist.
-_account_document_upload_service = FileUploadService(
+_account_document_upload_service = get_storage_service(
     base_dir=Path("media/account_documents"),
     allowed_content_types={
         "application/pdf": ".pdf",

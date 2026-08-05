@@ -18,7 +18,8 @@ from app.core.logging import logger
 from app.services.audit_service import log_audit
 from app.services.email.sender import EmailSender
 from app.services.email.templates import send_new_user_credentials_email
-from app.services.file_upload_service import FileUploadService, UnsupportedFileTypeError
+from app.services.file_upload_service import UnsupportedFileTypeError
+from app.services.storage import get_storage_service
 
 
 class EmailAlreadyExistsError(Exception):
@@ -196,7 +197,7 @@ class UnsupportedImageTypeError(UnsupportedFileTypeError):
     """Raised when an avatar upload isn't image/png or image/jpeg."""
 
 
-_avatar_upload_service = FileUploadService(
+_avatar_upload_service = get_storage_service(
     base_dir=Path("media/avatars"),
     allowed_content_types={"image/png": ".png", "image/jpeg": ".jpg"},
 )

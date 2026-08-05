@@ -7,6 +7,7 @@ from app.schemas.base import ORMBase
 
 from app.models.user import UserStatus
 from app.schemas.role import RoleRead
+from app.services.storage import resolve_file_url
 
 
 class UserCreate(BaseModel):
@@ -29,6 +30,11 @@ class UserRead(ORMBase):
     status: UserStatus
     created_at: datetime
     last_login_at: datetime | None
+
+    @field_validator("avatar_url")
+    @classmethod
+    def _resolve_avatar_url(cls, value: str | None) -> str | None:
+        return resolve_file_url(value) if value is not None else None
 
 
 class UserUpdate(BaseModel):
