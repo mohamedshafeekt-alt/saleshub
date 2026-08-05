@@ -12,15 +12,27 @@ import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.security import decode_access_token, hash_token
+from app.core.security import decode_access_token, hash_token, verify_password
+from app.models.password_reset_token import PasswordResetToken
 from app.models.refresh_token import RefreshToken
 from app.services.auth_service import (
     InvalidRefreshTokenError,
+    InvalidResetTokenError,
     issue_tokens,
     refresh_access_token,
+    request_password_reset,
+    reset_password,
     revoke_all_refresh_tokens,
     revoke_refresh_token,
 )
+
+
+class _FakeEmailSender:
+    def __init__(self) -> None:
+        self.sent: list[tuple[str, str, str]] = []
+
+    async def send(self, to: str, subject: str, body: str) -> None:
+        self.sent.append((to, subject, body))
 
 
 async def test_issue_tokens_returns_valid_access_and_refresh_token(db_session: AsyncSession, make_user):
@@ -186,3 +198,88 @@ async def test_revoke_refresh_token_writes_audit_log(db_session: AsyncSession, m
         )
     )
     assert result.scalar_one() is not None
+
+
+async def test_request_password_reset_creates_token_and_sends_email(db_session: AsyncSession, make_user):
+    user = await make_user(email="forgot@example.com")
+    sender = _FakeEmailSender()
+
+    await request_password_reset(db_session, user.email, sender)
+
+    result = await db_session.execute(select(PasswordResetToken).where(PasswordResetToken.user_id == user.id))
+    stored = result.scalar_one()
+    assert stored.used_at is None
+    assert len(sender.sent) == 1
+    assert sender.sent[0][0] == user.email
+
+
+async def test_request_password_reset_unknown_email_sends_nothing_and_does_not_raise(
+    db_session: AsyncSession,
+):
+    sender = _FakeEmailSender()
+
+    await request_password_reset(db_session, "nobody@example.com", sender)
+
+    assert sender.sent == []
+
+
+async def test_request_password_reset_inactive_user_sends_nothing(db_session: AsyncSession, make_user):
+    user = await make_user(email="forgot-inactive@example.com", is_active=False)
+    sender = _FakeEmailSender()
+
+    await request_password_reset(db_session, user.email, sender)
+
+    assert sender.sent == []
+
+
+async def _issue_reset_token(db_session: AsyncSession, sender: _FakeEmailSender, email: str) -> str:
+    await request_password_reset(db_session, email, sender)
+    result = await db_session.execute(select(PasswordResetToken))
+    stored = result.scalars().all()[-1]
+    # test-only: pull the raw token back out via the reset link it was sent in
+    return sender.sent[-1][2].split("?token=")[1].split("\n")[0]
+
+
+async def test_reset_password_updates_password_and_revokes_sessions(db_session: AsyncSession, make_user):
+    user = await make_user(email="reset-ok@example.com")
+    _, refresh_token = await issue_tokens(db_session, user)
+    sender = _FakeEmailSender()
+    token = await _issue_reset_token(db_session, sender, user.email)
+
+    await reset_password(db_session, token, "brand-new-password")
+
+    await db_session.refresh(user)
+    assert verify_password("brand-new-password", user.hashed_password)
+    with pytest.raises(InvalidRefreshTokenError):
+        await refresh_access_token(db_session, refresh_token)
+
+
+async def test_reset_password_rejects_unknown_token(db_session: AsyncSession):
+    with pytest.raises(InvalidResetTokenError):
+        await reset_password(db_session, "not-a-real-token", "whatever-new-pw")
+
+
+async def test_reset_password_rejects_expired_token(db_session: AsyncSession, make_user):
+    user = await make_user(email="reset-expired@example.com")
+    token = "expired-reset-token"
+    db_session.add(
+        PasswordResetToken(
+            user_id=user.id,
+            token_hash=hash_token(token),
+            expires_at=datetime.now(UTC).replace(tzinfo=None) - timedelta(hours=1),
+        )
+    )
+    await db_session.commit()
+
+    with pytest.raises(InvalidResetTokenError):
+        await reset_password(db_session, token, "whatever-new-pw")
+
+
+async def test_reset_password_rejects_already_used_token(db_session: AsyncSession, make_user):
+    user = await make_user(email="reset-used@example.com")
+    sender = _FakeEmailSender()
+    token = await _issue_reset_token(db_session, sender, user.email)
+    await reset_password(db_session, token, "first-new-password")
+
+    with pytest.raises(InvalidResetTokenError):
+        await reset_password(db_session, token, "second-new-password")

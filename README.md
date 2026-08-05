@@ -85,6 +85,7 @@ _(updated after every feature — do not batch these)_
 - [x] New `dashboard.view` permission — `GET /api/v1/dashboard` is no longer open to any authenticated user; it now requires this permission, granted by default only to the Sales Manager starter role (Admin gets it automatically via the full-catalog grant). Sales Rep/Delivery SME get `403` unless an admin edits their role via `/roles` to add it
 
 
+- [x] Forgot Password — `POST /api/v1/auth/forgot-password` (always 204, no user enumeration) emails a single-use, 1-hour reset token to the account if it exists and is active; `POST /api/v1/auth/reset-password` (token + new_password) updates the password and revokes every other active refresh token, forcing re-login elsewhere. New `password_reset_tokens` table, mirrors `refresh_tokens`' shape. Email currently carries the raw token (no frontend reset-page URL exists yet to link to)
 - [ ] Static Pre-Sales Checklist per deal
 - [ ] Activity log for Account (Lead's and Deal's are done; Account's is still open)
 - [ ] Dashboard aggregation endpoints (funnel, target vs actual)
