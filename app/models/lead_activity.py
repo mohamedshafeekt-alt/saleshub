@@ -18,9 +18,9 @@ class LeadActivity(Base):
     __tablename__ = "lead_activities"
 
     lead_id: Mapped[int] = mapped_column(ForeignKey("leads.id", ondelete="CASCADE"), nullable=False, index=True)
-    type: Mapped[LeadActivityType] = mapped_column(
+    type: Mapped[LeadActivityType | None] = mapped_column(
         Enum(LeadActivityType, name="lead_activity_type", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
-        nullable=False,
+        nullable=True,
     )
     note: Mapped[str] = mapped_column(nullable=False)
     created_by: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False)

@@ -75,3 +75,16 @@ async def test_created_by_is_required(db_session: AsyncSession):
     db_session.add(LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="anonymous", created_by=None))
     with pytest.raises(IntegrityError):
         await db_session.flush()
+
+
+async def test_type_is_optional(db_session: AsyncSession):
+    """System-generated entries (e.g. the lead-favourite toggle log) carry no
+    type, unlike user-authored note/call/meeting/comment/follow-up rows."""
+    lead, user = await _make_lead_and_user(db_session, "no-type")
+
+    activity = LeadActivity(lead_id=lead.id, note="Lead marked as favourite by Rep", created_by=user.id)
+    db_session.add(activity)
+    await db_session.flush()
+    await db_session.refresh(activity)
+
+    assert activity.type is None

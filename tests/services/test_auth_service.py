@@ -234,8 +234,6 @@ async def test_request_password_reset_inactive_user_sends_nothing(db_session: As
 
 async def _issue_reset_token(db_session: AsyncSession, sender: _FakeEmailSender, email: str) -> str:
     await request_password_reset(db_session, email, sender)
-    result = await db_session.execute(select(PasswordResetToken))
-    stored = result.scalars().all()[-1]
     # test-only: pull the raw token back out via the reset link it was sent in
     return sender.sent[-1][2].split("?token=")[1].split("\n")[0]
 
