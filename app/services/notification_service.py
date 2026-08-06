@@ -73,7 +73,7 @@ async def _overdue_followup_items(db: AsyncSession, requester: User) -> list[Ove
     for lead in result.scalars():
         if lead.next_follow_up_date is None:
             continue
-        lead_name = f"{lead.first_name} {lead.last_name}".strip()
+        lead_name = lead.name
         items.append(
             OverdueFollowUpItem(
                 id=-lead.id,  # negative: never collides with a real Notification.id
@@ -151,10 +151,10 @@ async def _get_owned_notification_or_raise(db: AsyncSession, notification_id: in
     return notification
 
 
-async def mark_read(db: AsyncSession, notification_id: int, *, requester: User) -> Notification:
+async def set_read(db: AsyncSession, notification_id: int, *, requester: User, is_read: bool) -> Notification:
     notification = await _get_owned_notification_or_raise(db, notification_id, requester)
-    notification.is_read = True
-    notification.read_at = datetime.now()
+    notification.is_read = is_read
+    notification.read_at = datetime.now() if is_read else None
     await db.flush()
     return notification
 

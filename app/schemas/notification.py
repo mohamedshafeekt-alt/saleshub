@@ -22,6 +22,10 @@ class NotificationRead(ORMBase):
     created_at: datetime
 
 
+class NotificationUpdate(BaseModel):
+    is_read: bool
+
+
 class UnreadCountRead(BaseModel):
     unread_count: int
 

@@ -5,6 +5,7 @@ import string
 from datetime import UTC, datetime
 from pathlib import Path
 
+from fastapi import BackgroundTasks
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,7 +40,20 @@ def _generate_password() -> str:
     return "".join(secrets.choice(alphabet) for _ in range(12))
 
 
-async def create_user(db: AsyncSession, data: UserCreate, email_sender: EmailSender, actor_id: int) -> User:
+async def _send_new_user_email_safe(email_sender: EmailSender, to: str, password: str) -> None:
+    try:
+        await send_new_user_credentials_email(email_sender, to, password)
+    except Exception:
+        logger.warning("Failed to send new-user credentials email to %s", to, exc_info=True)
+
+
+async def create_user(
+    db: AsyncSession,
+    data: UserCreate,
+    email_sender: EmailSender,
+    actor_id: int,
+    background_tasks: BackgroundTasks | None = None,
+) -> User:
     role = await db.get(Role, data.role_id)
     if role is None or role.is_delete:
         raise RoleNotFoundError(f"Role not found: {data.role_id}")
@@ -81,10 +95,15 @@ async def create_user(db: AsyncSession, data: UserCreate, email_sender: EmailSen
         actor_id=actor_id, description=f"User '{user.email}' created",
     )
 
-    try:
-        await send_new_user_credentials_email(email_sender, user.email, password)
-    except Exception:
-        logger.warning("Failed to send new-user credentials email to %s", user.email, exc_info=True)
+    # Not awaited inline when a background_tasks handle is available: SMTP is
+    # slow/flaky enough (real mail server round-trip) that awaiting it here
+    # was making "create user" time out on the client. background_tasks is
+    # None in service-level tests calling create_user directly -- falls back
+    # to the old inline-await behavior there.
+    if background_tasks is not None:
+        background_tasks.add_task(_send_new_user_email_safe, email_sender, user.email, password)
+    else:
+        await _send_new_user_email_safe(email_sender, user.email, password)
 
     return user
 

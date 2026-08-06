@@ -83,6 +83,29 @@ async def test_lead_persists_with_only_required_fields(db_session: AsyncSession)
     assert lead.follow_up_note is None
 
 
+async def test_lead_name_omits_missing_last_name_instead_of_literal_none(db_session: AsyncSession):
+    """Regression: f"{first_name} {last_name}" renders a None last_name as
+    the literal text "None" (e.g. "Jane None"), not as absent -- the .name
+    property must join only the parts that exist, same as owner_name."""
+    from app.models.lead import Lead
+
+    owner = await _make_owner(db_session, email="owner-name-prop@example.com")
+    lead = Lead(
+        first_name="Jane", last_name=None, company="Acme Corp",
+        email="jane-name-prop@acme.com", source=LeadSource.WEBSITE, owner_id=owner.id,
+    )
+
+    assert lead.name == "Jane"
+
+
+async def test_lead_name_joins_first_and_last_name_when_both_present(db_session: AsyncSession):
+    from app.models.lead import Lead
+
+    lead = Lead(first_name="Jane", last_name="Doe", company="Acme Corp", email="x@acme.com", source=LeadSource.WEBSITE)
+
+    assert lead.name == "Jane Doe"
+
+
 async def test_duplicate_email_violates_unique_constraint(db_session: AsyncSession):
     from app.models.lead import Lead
 

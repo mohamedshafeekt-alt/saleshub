@@ -62,6 +62,10 @@ class Lead(Base):
     )
 
     @property
+    def name(self) -> str:
+        return " ".join(filter(None, [self.first_name, self.last_name]))
+
+    @property
     def owner_name(self) -> str | None:
         if self.owner is None:
             return None

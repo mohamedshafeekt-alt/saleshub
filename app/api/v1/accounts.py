@@ -85,7 +85,13 @@ async def create_account_route(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> AccountRead:
-    account = await create_account(db, data, current_user)
+    try:
+        account = await create_account(db, data, current_user)
+    except PrimaryContactAlreadyExistsError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DuplicateContactEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
     await db.commit()
     return AccountRead.model_validate(account)
 

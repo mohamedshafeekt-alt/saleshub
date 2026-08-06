@@ -17,6 +17,7 @@ from app.models.enums import AuditAction, LeadTier
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from app.services.audit_service import log_audit
+from app.services.contact_service import DuplicateContactEmailError
 from app.services.lead_service import get_lead
 
 _EAGER_LOAD_OPTIONS = (
@@ -66,10 +67,11 @@ async def _add_contacts(db: AsyncSession, account_id: int, contacts: list[Accoun
     AccountCreate/AccountUpdate validator) and back-fills any later contact
     that omits its own, since Contact.first_name is NOT NULL.
 
-    Checked up front rather than relying on the DB's partial-unique-index +
-    IntegrityError rollback: this runs after the Account itself may already
-    be flushed in the same transaction (create_account), and rolling back on
-    conflict would undo that too, not just this call's own inserts.
+    Checked up front rather than relying on the DB's partial-unique-index /
+    unique-email-index + IntegrityError rollback: this runs after the
+    Account itself may already be flushed in the same transaction
+    (create_account), and rolling back on conflict would undo that too, not
+    just this call's own inserts.
     """
     if not contacts:
         return
@@ -82,6 +84,14 @@ async def _add_contacts(db: AsyncSession, account_id: int, contacts: list[Accoun
         db, account_id
     ):
         raise PrimaryContactAlreadyExistsError(f"Account {account_id} already has a primary contact")
+
+    emails = [contact.email for contact in contacts]
+    if len(emails) != len(set(emails)):
+        raise DuplicateContactEmailError("Duplicate email within the same request")
+    result = await db.execute(select(Contact.email).where(Contact.email.in_(emails)))
+    existing_email = result.scalar_one_or_none()
+    if existing_email is not None:
+        raise DuplicateContactEmailError(f"Email already exists: {existing_email}")
 
     first_name = contacts[0].first_name
     last_name = contacts[0].last_name
@@ -339,8 +349,7 @@ async def convert_lead_to_account(
         db, table_name="accounts", record_id=account.id, action=AuditAction.CREATED,
         actor_id=requester.id,
         description=(
-            f"Account '{account.company}' created from lead "
-            f"'{f'{lead.first_name} {lead.last_name}'.strip()}' conversion"
+            f"Account '{account.company}' created from lead '{lead.name}' conversion"
         ),
     )
     await log_audit(
