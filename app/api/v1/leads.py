@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -56,13 +56,16 @@ router = APIRouter(prefix="/leads", tags=["leads"])
 async def upsert_lead_route(
     data: LeadUpsert,
     response: Response,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     email_sender: EmailSender = Depends(get_email_sender),
 ) -> LeadRead:
     try:
         if data.id is None:
-            lead = await create_lead(db, data, email_sender, requester=current_user)
+            lead = await create_lead(
+                db, data, email_sender, requester=current_user, background_tasks=background_tasks
+            )
             response.status_code = status.HTTP_201_CREATED
         else:
             lead = await update_lead(db, data.id, data, requester=current_user)

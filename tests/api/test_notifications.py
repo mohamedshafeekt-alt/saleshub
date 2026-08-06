@@ -1,8 +1,10 @@
 """HTTP-level contract for /api/v1/notifications.
 
-Covers: 401 no auth, list + unread_only/type filters, unread-count, mark-one
-read (200 + 404 for someone else's / missing id), mark-all (with and without
-an ids body), bulk delete (200 + 403 for someone else's notification).
+Covers: 401 no auth, list + unread_only/type filters, unread-count,
+PATCH /{id} {"is_read": bool} to toggle one notification's read state in
+either direction (200 + 404 for someone else's / missing id), mark-all
+(with and without an ids body), bulk delete (200 + 403 for someone else's
+notification).
 """
 
 from httpx import AsyncClient
@@ -69,7 +71,7 @@ async def test_unread_count(client: AsyncClient, make_user, auth_headers, db_ses
     assert response.json()["unread_count"] == 1
 
 
-async def test_mark_one_read(client: AsyncClient, make_user, auth_headers, db_session):
+async def test_update_notification_marks_read(client: AsyncClient, make_user, auth_headers, db_session):
     recipient = await make_user(email="api-mark-one@example.com")
     notification = await create_notification(
         db_session, recipient_id=recipient.id, type=NotificationType.NEW_LEAD,
@@ -78,22 +80,44 @@ async def test_mark_one_read(client: AsyncClient, make_user, auth_headers, db_se
     await db_session.commit()
     headers = auth_headers(recipient)
 
-    response = await client.patch(f"{NOTIFICATIONS_URL}/{notification.id}/read", headers=headers)
+    response = await client.patch(
+        f"{NOTIFICATIONS_URL}/{notification.id}", json={"is_read": True}, headers=headers
+    )
 
     assert response.status_code == 200
     assert response.json()["is_read"] is True
 
 
-async def test_mark_one_read_not_found(client: AsyncClient, make_user, auth_headers):
+async def test_update_notification_marks_unread(client: AsyncClient, make_user, auth_headers, db_session):
+    recipient = await make_user(email="api-mark-unread@example.com")
+    notification = await create_notification(
+        db_session, recipient_id=recipient.id, type=NotificationType.NEW_LEAD,
+        title="a", body="a", entity_type="lead", entity_id=1,
+    )
+    await db_session.commit()
+    headers = auth_headers(recipient)
+    await client.patch(f"{NOTIFICATIONS_URL}/{notification.id}", json={"is_read": True}, headers=headers)
+
+    response = await client.patch(
+        f"{NOTIFICATIONS_URL}/{notification.id}", json={"is_read": False}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["is_read"] is False
+
+
+async def test_update_notification_not_found(client: AsyncClient, make_user, auth_headers):
     recipient = await make_user(email="api-mark-notfound@example.com")
     headers = auth_headers(recipient)
 
-    response = await client.patch(f"{NOTIFICATIONS_URL}/999999/read", headers=headers)
+    response = await client.patch(f"{NOTIFICATIONS_URL}/999999", json={"is_read": True}, headers=headers)
 
     assert response.status_code == 404
 
 
-async def test_mark_one_read_forbidden_for_other_recipient(client: AsyncClient, make_user, auth_headers, db_session):
+async def test_update_notification_forbidden_for_other_recipient(
+    client: AsyncClient, make_user, auth_headers, db_session
+):
     recipient = await make_user(email="api-mark-owner@example.com")
     other = await make_user(email="api-mark-other@example.com")
     notification = await create_notification(
@@ -103,7 +127,9 @@ async def test_mark_one_read_forbidden_for_other_recipient(client: AsyncClient, 
     await db_session.commit()
     headers = auth_headers(other)
 
-    response = await client.patch(f"{NOTIFICATIONS_URL}/{notification.id}/read", headers=headers)
+    response = await client.patch(
+        f"{NOTIFICATIONS_URL}/{notification.id}", json={"is_read": True}, headers=headers
+    )
 
     assert response.status_code == 403
 

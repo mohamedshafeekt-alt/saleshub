@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from fastapi import BackgroundTasks
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.security import hash_password, verify_password
@@ -26,8 +27,11 @@ from tests.support.roles import UserRole, role_id_for
 
 
 class _FakeEmailSender:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+
     async def send(self, to: str, subject: str, body: str) -> None:
-        pass
+        self.calls.append({"to": to, "subject": subject, "body": body})
 
 
 async def _make_user(db_session: AsyncSession, email: str, role: UserRole = UserRole.SALES_REP) -> User:
@@ -241,6 +245,29 @@ async def test_create_user_rejects_active_duplicate_email(db_session: AsyncSessi
             _FakeEmailSender(),
             actor_id=actor.id,
         )
+
+
+async def test_create_user_defers_credentials_email_to_background_task(db_session: AsyncSession):
+    """When a background_tasks handle is passed (as the route does), the
+    credentials email must not be awaited inline -- that's what was making
+    "invite user" slow/timeout on save (see saleshub issue tracker)."""
+    admin = await _make_user(db_session, "bg-email-admin@example.com", role=UserRole.ADMIN)
+    role_id = await role_id_for(db_session, UserRole.SALES_REP)
+    sender = _FakeEmailSender()
+    background_tasks = BackgroundTasks()
+
+    user = await create_user(
+        db_session,
+        UserCreate(email="bg-email-new@example.com", first_name="New", last_name="User", role_id=role_id),
+        sender,
+        actor_id=admin.id,
+        background_tasks=background_tasks,
+    )
+
+    assert sender.calls == []  # not sent yet -- deferred, not blocking create_user's return
+    await background_tasks()
+    assert len(sender.calls) == 1
+    assert sender.calls[0]["to"] == user.email
 
 
 async def test_update_profile_sets_name_and_phone(db_session: AsyncSession):

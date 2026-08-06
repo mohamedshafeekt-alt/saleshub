@@ -152,6 +152,54 @@ async def test_create_lead_notifies_all_admins(db_session: AsyncSession):
     assert notified == {admin_a.email, admin_b.email}
 
 
+async def test_create_lead_defers_notify_emails_to_background_task(db_session: AsyncSession):
+    """When a background_tasks handle is passed (as the route does), notify
+    emails must not be awaited inline -- sequential SMTP sends per
+    notifiable admin was what made "add new lead" slow/timeout on save."""
+    from fastapi import BackgroundTasks
+
+    admin = await _make_user(db_session, "bg-lead-admin@example.com", UserRole.ADMIN)
+    fake_sender = FakeEmailSender()
+    background_tasks = BackgroundTasks()
+
+    data = LeadUpsert(
+        first_name="Jane",
+        company="Acme Corp",
+        email="bg-notify@acme.com",
+        source=LeadSource.WEBSITE,
+    )
+    await create_lead(db_session, data, fake_sender, requester=admin, background_tasks=background_tasks)
+
+    assert fake_sender.calls == []  # not sent yet -- deferred, not blocking create_lead's return
+    await background_tasks()
+    assert {call["to"] for call in fake_sender.calls} == {admin.email}
+
+
+async def test_create_lead_without_last_name_omits_none_from_notify_email_and_notification(
+    db_session: AsyncSession,
+):
+    from app.models.notification import Notification
+
+    admin = await _make_user(db_session, "no-last-name-admin@example.com", UserRole.ADMIN)
+    fake_sender = FakeEmailSender()
+
+    data = LeadUpsert(
+        first_name="Selva",
+        company="Selva Co",
+        email="no-last-name-lead@acme.com",
+        source=LeadSource.WEBSITE,
+    )
+    lead = await create_lead(db_session, data, fake_sender, requester=admin)
+
+    assert "None" not in fake_sender.calls[0]["body"]
+
+    result = await db_session.execute(
+        select(Notification).where(Notification.recipient_id == admin.id, Notification.entity_id == lead.id)
+    )
+    notification = result.scalar_one()
+    assert "None" not in notification.body
+
+
 async def test_create_lead_creates_in_app_notifications_for_notifiable_users(db_session: AsyncSession):
     from app.models.notification import Notification
 

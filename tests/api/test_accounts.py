@@ -296,6 +296,79 @@ async def test_create_account_without_contacts_creates_none(
     assert contacts_response.json()["items"] == []
 
 
+async def test_create_account_duplicate_contact_email_within_request_returns_409(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-create-acc-dup-email@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        ACCOUNTS_URL,
+        json=_account_payload(
+            owner_id=rep.id,
+            company="Dup Email Request Co",
+            contacts=[
+                {"first_name": "Jane", "email": "dup-in-request@example.com"},
+                {"email": "dup-in-request@example.com"},
+            ],
+        ),
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+
+
+async def test_create_account_contact_email_already_used_elsewhere_returns_409(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-create-acc-dup-existing@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+    first = await client.post(
+        ACCOUNTS_URL,
+        json=_account_payload(
+            owner_id=rep.id,
+            company="First Co",
+            contacts=[{"first_name": "Jane", "email": "already-used-acc@example.com"}],
+        ),
+        headers=headers,
+    )
+    assert first.status_code == 201
+
+    response = await client.post(
+        ACCOUNTS_URL,
+        json=_account_payload(
+            owner_id=rep.id,
+            company="Second Co",
+            contacts=[{"first_name": "Someone Else", "email": "already-used-acc@example.com"}],
+        ),
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+
+
+async def test_create_account_two_primary_contacts_returns_409(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-create-acc-two-primary@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        ACCOUNTS_URL,
+        json=_account_payload(
+            owner_id=rep.id,
+            company="Two Primary Co",
+            contacts=[
+                {"first_name": "Jane", "email": "primary1@example.com", "is_primary": True},
+                {"email": "primary2@example.com", "is_primary": True},
+            ],
+        ),
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+
+
 async def test_create_account_first_contact_missing_first_name_returns_422(
     client: AsyncClient, make_user, auth_headers
 ):

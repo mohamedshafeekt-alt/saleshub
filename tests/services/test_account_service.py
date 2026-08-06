@@ -31,6 +31,7 @@ from app.services.account_service import (
     AccountNotFoundError,
     LeadAlreadyConvertedError,
     LeadMissingFieldsForConversionError,
+    PrimaryContactAlreadyExistsError,
     convert_lead_to_account,
     create_account,
     delete_account,
@@ -40,6 +41,7 @@ from app.services.account_service import (
     list_accounts,
     update_account,
 )
+from app.services.contact_service import DuplicateContactEmailError
 from app.services.lead_service import LeadAccessForbiddenError, LeadNotFoundError
 
 
@@ -144,6 +146,63 @@ async def test_create_account_nameless_extra_contacts_inherit_first_contacts_nam
     assert contacts[1].last_name == "Doe"
     assert contacts[1].email == "jane-work@example.com"
     assert contacts[1].phone == "+1-555-0100"
+
+
+async def test_create_account_rejects_two_primary_contacts(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-acc-two-primary@example.com", UserRole.SALES_REP)
+    data = AccountCreate(
+        company="Two Primary Co",
+        domain="two-primary.example.com",
+        tier=LeadTier.GOLD,
+        owner_id=owner.id,
+        contacts=[
+            AccountContactInput(first_name="Jane", email="jane-primary1@example.com", is_primary=True),
+            AccountContactInput(email="jane-primary2@example.com", is_primary=True),
+        ],
+    )
+
+    with pytest.raises(PrimaryContactAlreadyExistsError):
+        await create_account(db_session, data, owner)
+
+
+async def test_create_account_rejects_duplicate_email_within_request(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-acc-dup-email-req@example.com", UserRole.SALES_REP)
+    data = AccountCreate(
+        company="Dup Email Co",
+        domain="dup-email.example.com",
+        tier=LeadTier.GOLD,
+        owner_id=owner.id,
+        contacts=[
+            AccountContactInput(first_name="Jane", email="dup-acc-svc@example.com"),
+            AccountContactInput(email="dup-acc-svc@example.com"),
+        ],
+    )
+
+    with pytest.raises(DuplicateContactEmailError):
+        await create_account(db_session, data, owner)
+
+
+async def test_create_account_rejects_email_already_used_by_another_contact(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-acc-dup-email-existing@example.com", UserRole.SALES_REP)
+    first_data = AccountCreate(
+        company="Existing Contact Co",
+        domain="existing-contact.example.com",
+        tier=LeadTier.GOLD,
+        owner_id=owner.id,
+        contacts=[AccountContactInput(first_name="Jane", email="already-used@example.com")],
+    )
+    await create_account(db_session, first_data, owner)
+
+    second_data = AccountCreate(
+        company="Second Co",
+        domain="second-co.example.com",
+        tier=LeadTier.GOLD,
+        owner_id=owner.id,
+        contacts=[AccountContactInput(first_name="Someone Else", email="already-used@example.com")],
+    )
+
+    with pytest.raises(DuplicateContactEmailError):
+        await create_account(db_session, second_data, owner)
 
 
 async def test_create_account_returns_owner_name_and_contact_count(db_session: AsyncSession):

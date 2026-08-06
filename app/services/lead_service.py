@@ -3,6 +3,7 @@ listing/search, and ownership-checked get/update/delete."""
 
 from typing import Any
 
+from fastapi import BackgroundTasks
 from sqlalchemy import ColumnElement, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,7 +46,20 @@ def _is_duplicate_email_violation(exc: IntegrityError) -> bool:
     return "ix_leads_email" in str(exc.orig) or "ix_lead_contacts_email" in str(exc.orig)
 
 
-async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSender, requester: User) -> Lead:
+async def _send_new_lead_email_safe(email_sender: EmailSender, to: str, lead_name: str, company: str) -> None:
+    try:
+        await send_new_lead_notification_email(email_sender, to, lead_name, company)
+    except Exception:
+        logger.warning("Failed to send new-lead notification email to %s", to, exc_info=True)
+
+
+async def create_lead(
+    db: AsyncSession,
+    data: LeadUpsert,
+    email_sender: EmailSender,
+    requester: User,
+    background_tasks: BackgroundTasks | None = None,
+) -> Lead:
     lead_data = data.model_dump(exclude={"id", "contacts"})
     lead_data["status"] = lead_data["status"] or LeadStatus.NOT_CONTACTED
     lead_data["is_favourite"] = lead_data["is_favourite"] or False
@@ -77,14 +91,19 @@ async def create_lead(db: AsyncSession, data: LeadUpsert, email_sender: EmailSen
         .join(Permission, role_permissions.c.permission_id == Permission.id)
         .where(Permission.code == LEADS_NOTIFY_ON_CREATE)
     )
-    lead_name = f"{lead.first_name} {lead.last_name}".strip()
+    lead_name = lead.name
     for notifiable in result.scalars():
-        try:
-            await send_new_lead_notification_email(email_sender, notifiable.email, lead_name, lead.company)
-        except Exception:
-            logger.warning(
-                "Failed to send new-lead notification email to %s", notifiable.email, exc_info=True
+        # Not awaited inline when background_tasks is available: sending N
+        # notify-on-create emails sequentially inside the request (one SMTP
+        # round-trip each) was what made "add new lead" slow/timeout on
+        # save. background_tasks is None in service-level tests calling
+        # create_lead directly -- falls back to the old inline-await there.
+        if background_tasks is not None:
+            background_tasks.add_task(
+                _send_new_lead_email_safe, email_sender, notifiable.email, lead_name, lead.company
             )
+        else:
+            await _send_new_lead_email_safe(email_sender, notifiable.email, lead_name, lead.company)
         await create_notification(
             db,
             recipient_id=notifiable.id,
@@ -270,7 +289,7 @@ async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requeste
         raise
 
     if "owner_id" in updates and updates["owner_id"] is not None and updates["owner_id"] != old_owner_id:
-        lead_name = f"{lead.first_name} {lead.last_name}".strip()
+        lead_name = lead.name
         await create_notification(
             db,
             recipient_id=updates["owner_id"],
@@ -288,7 +307,7 @@ async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requeste
     # serialization) would raise MissingGreenlet. Refresh now, while still awaitable.
     await db.refresh(lead)
 
-    description = f"Lead '{f'{lead.first_name} {lead.last_name}'.strip()} at {lead.company}' updated"
+    description = f"Lead '{lead.name} at {lead.company}' updated"
     if "is_favourite" in updates and updates["is_favourite"] != old_is_favourite:
         description += " (marked as favourite)" if updates["is_favourite"] else " (removed from favourites)"
         requester_name = " ".join(filter(None, [requester.first_name, requester.last_name]))
@@ -312,7 +331,7 @@ async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requeste
 async def delete_lead(db: AsyncSession, lead_id: int, requester: User) -> None:
     lead = await _get_lead_or_raise(db, lead_id, requester)
     lead_id_, company = lead.id, lead.company
-    lead_name = f"{lead.first_name} {lead.last_name}".strip()
+    lead_name = lead.name
     await db.delete(lead)
     await db.flush()
     await log_audit(

@@ -1,7 +1,7 @@
 """POST /users (admin-only user creation), GET /users (list, for owner assignment),
 GET/PATCH /users/me (own profile), POST /users/me/password (own password change)."""
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.deps import get_current_user, get_email_sender
@@ -35,12 +35,15 @@ router = APIRouter(prefix="/users", tags=["users"])
 @requires_permission(USERS_MANAGE)
 async def create_user_route(
     data: UserCreate,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     email_sender: EmailSender = Depends(get_email_sender),
 ) -> UserRead:
     try:
-        user = await create_user(db, data, email_sender, actor_id=current_user.id)
+        user = await create_user(
+            db, data, email_sender, actor_id=current_user.id, background_tasks=background_tasks
+        )
     except EmailAlreadyExistsError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except RoleNotFoundError as exc:

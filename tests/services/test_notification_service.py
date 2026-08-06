@@ -1,9 +1,10 @@
-"""app.services.notification_service: create/list/unread-count/mark-read/delete.
+"""app.services.notification_service: create/list/unread-count/set_read/delete.
 
 Covers: create_notification defaults; list_notifications unread_only + type
 filters and pagination; overdue-follow-up leads merged into the list;
-unread count math; mark one read; mark-all (optionally scoped to ids);
-delete is a soft delete and is recipient-scoped (403 on someone else's row).
+unread count math; set_read (both directions, toggling is_read/read_at);
+mark-all (optionally scoped to ids); delete is a soft delete and is
+recipient-scoped (403 on someone else's row).
 """
 
 from datetime import date, timedelta
@@ -20,7 +21,7 @@ from app.services.notification_service import (
     get_unread_count,
     list_notifications,
     mark_all_read,
-    mark_read,
+    set_read,
 )
 
 
@@ -52,7 +53,7 @@ async def test_list_notifications_unread_only_filter(db_session: AsyncSession, m
         db_session, recipient_id=recipient.id, type=NotificationType.NEW_LEAD,
         title="b", body="b", entity_type="lead", entity_id=2,
     )
-    await mark_read(db_session, read_one.id, requester=recipient)
+    await set_read(db_session, read_one.id, requester=recipient, is_read=True)
 
     items, total = await list_notifications(db_session, requester=recipient, unread_only=True)
 
@@ -115,7 +116,34 @@ async def test_get_unread_count(db_session: AsyncSession, make_user):
     assert count == 2
 
 
-async def test_mark_read_forbidden_for_other_recipient(db_session: AsyncSession, make_user):
+async def test_set_read_true_marks_read_with_timestamp(db_session: AsyncSession, make_user):
+    recipient = await make_user(email="recipient-set-read@example.com")
+    notification = await create_notification(
+        db_session, recipient_id=recipient.id, type=NotificationType.NEW_LEAD,
+        title="a", body="a", entity_type="lead", entity_id=1,
+    )
+
+    read = await set_read(db_session, notification.id, requester=recipient, is_read=True)
+
+    assert read.is_read is True
+    assert read.read_at is not None
+
+
+async def test_set_read_false_clears_is_read_and_read_at(db_session: AsyncSession, make_user):
+    recipient = await make_user(email="recipient-set-unread@example.com")
+    notification = await create_notification(
+        db_session, recipient_id=recipient.id, type=NotificationType.NEW_LEAD,
+        title="a", body="a", entity_type="lead", entity_id=1,
+    )
+    await set_read(db_session, notification.id, requester=recipient, is_read=True)
+
+    unread = await set_read(db_session, notification.id, requester=recipient, is_read=False)
+
+    assert unread.is_read is False
+    assert unread.read_at is None
+
+
+async def test_set_read_forbidden_for_other_recipient(db_session: AsyncSession, make_user):
     recipient = await make_user(email="recipient-forbidden@example.com")
     other = await make_user(email="other-forbidden@example.com")
     notification = await create_notification(
@@ -124,14 +152,14 @@ async def test_mark_read_forbidden_for_other_recipient(db_session: AsyncSession,
     )
 
     with pytest.raises(NotificationAccessForbiddenError):
-        await mark_read(db_session, notification.id, requester=other)
+        await set_read(db_session, notification.id, requester=other, is_read=True)
 
 
-async def test_mark_read_not_found(db_session: AsyncSession, make_user):
+async def test_set_read_not_found(db_session: AsyncSession, make_user):
     recipient = await make_user(email="recipient-notfound@example.com")
 
     with pytest.raises(NotificationNotFoundError):
-        await mark_read(db_session, 999999, requester=recipient)
+        await set_read(db_session, 999999, requester=recipient, is_read=True)
 
 
 async def test_mark_all_read_scoped_to_ids(db_session: AsyncSession, make_user):

@@ -14,6 +14,7 @@ from app.schemas.notification import (
     DeleteNotificationsRequest,
     MarkReadRequest,
     NotificationRead,
+    NotificationUpdate,
     UnreadCountRead,
 )
 from app.services.notification_service import (
@@ -23,7 +24,7 @@ from app.services.notification_service import (
     get_unread_count,
     list_notifications,
     mark_all_read,
-    mark_read,
+    set_read,
 )
 
 router = APIRouter(prefix="/notifications", tags=["notifications"])
@@ -55,14 +56,15 @@ async def unread_count_route(
     return UnreadCountRead(unread_count=count)
 
 
-@router.patch("/{notification_id}/read", response_model=NotificationRead)
-async def mark_one_read_route(
+@router.patch("/{notification_id}", response_model=NotificationRead)
+async def update_notification_route(
     notification_id: int,
+    data: NotificationUpdate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> NotificationRead:
     try:
-        notification = await mark_read(db, notification_id, requester=current_user)
+        notification = await set_read(db, notification_id, requester=current_user, is_read=data.is_read)
     except NotificationNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
     except NotificationAccessForbiddenError as exc:
