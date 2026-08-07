@@ -137,15 +137,6 @@ async def create_deal(db: AsyncSession, data: DealCreate, requester: User) -> De
         db, table_name="deals", record_id=deal.id, action=AuditAction.CREATED,
         actor_id=requester.id, description=f"Deal '{deal.deal_name}' created",
     )
-    # deal is a freshly-constructed instance, never loaded via a `select(Deal)`
-    # -- account/stage/owner (lazy="joined" only applies to query-time loads)
-    # are unpopulated relationship attributes. Accessing them later to build
-    # DealRead would trigger an implicit lazy load, which crashes
-    # (MissingGreenlet) because that happens outside any awaited call. Whether
-    # it accidentally works instead depends on those rows still being
-    # strongly referenced elsewhere in the session (e.g. the account/stage
-    # lookups above going out of scope) -- not something to rely on.
-    await db.refresh(deal, attribute_names=["account", "stage", "owner"])
     return deal
 
 
@@ -343,16 +334,6 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
         db, table_name="deals", record_id=deal.id, action=AuditAction.UPDATED,
         actor_id=requester.id, description=description,
     )
-    # Setting deal.account_id/stage_id/owner_id via setattr() above doesn't
-    # sync the already-loaded account/stage/owner relationship attributes --
-    # they'd still hold whichever row was linked when _get_deal_or_raise
-    # first loaded this deal, so DealRead.account_name/stage_name/
-    # stage_is_cold/owner_name would echo back the *old* value after a
-    # reassignment.
-    fk_to_relationship = {"account_id": "account", "stage_id": "stage", "owner_id": "owner"}
-    changed_relationships = [rel for fk, rel in fk_to_relationship.items() if fk in updates]
-    if changed_relationships:
-        await db.refresh(deal, attribute_names=changed_relationships)
     return deal
 
 
