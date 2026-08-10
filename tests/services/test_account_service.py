@@ -517,6 +517,35 @@ async def test_delete_account_removes_the_row(db_session: AsyncSession, make_acc
         await get_account(db_session, account_id=account_id, requester=owner)
 
 
+async def test_delete_account_with_a_linked_contact_removes_the_contact_account_row(
+    db_session: AsyncSession,
+):
+    # Regression test: delete_account loads the account through
+    # _get_account_or_raise, which eagerly selectinloads contact_accounts.
+    # With that collection already populated, deleting the account must not
+    # try to null contact_accounts.account_id (NOT NULL) instead of letting
+    # the FK's ON DELETE CASCADE remove the row.
+    owner = await _make_user(db_session, "owner-del-with-contact@example.com", UserRole.SALES_REP)
+    data = AccountCreate(
+        company="Delete With Contact Co",
+        domain="delete-with-contact.example.com",
+        tier=LeadTier.GOLD,
+        owner_id=owner.id,
+        contacts=[AccountContactInput(first_name="Jane", last_name="Doe", email="jane-del@example.com")],
+    )
+    account = await create_account(db_session, data, owner)
+    account_id = account.id
+
+    await delete_account(db_session, account_id=account_id, requester=owner)
+
+    with pytest.raises(AccountNotFoundError):
+        await get_account(db_session, account_id=account_id, requester=owner)
+    remaining_links = (
+        await db_session.execute(select(ContactAccount).where(ContactAccount.account_id == account_id))
+    ).scalars().all()
+    assert remaining_links == []
+
+
 # --- get_account_overview -----------------------------------------------------
 
 
