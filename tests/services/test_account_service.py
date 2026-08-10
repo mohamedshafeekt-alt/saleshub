@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.enums import LeadTier
+from app.models.lead_contact import LeadContact
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from tests.support.roles import UserRole, role_id_for
@@ -666,6 +667,50 @@ async def test_convert_lead_to_account_creates_primary_contact_from_lead(
     assert contact.email == "convert-contact@example.com"
     assert contact.phone == "9876543210"
     assert contact.linkedin_url == "https://linkedin.com/in/selva"
+
+
+async def test_convert_lead_to_account_carries_over_additional_lead_contacts(
+    db_session: AsyncSession, make_lead
+):
+    # Regression test: a Lead's "+ Add another email" contacts (LeadContact
+    # rows beyond the one mirroring the lead's own email) were silently
+    # dropped on conversion -- only the primary contact made it onto the
+    # new Account.
+    owner = await _make_user(db_session, "owner-convert-multi@example.com", UserRole.SALES_REP)
+    lead = await make_lead(
+        owner_id=owner.id,
+        email="convert-multi@example.com",
+        first_name="Selva",
+        last_name="Kumar",
+        phone="9876543210",
+    )
+    db_session.add_all(
+        [
+            LeadContact(lead_id=lead.id, email=lead.email, phone=lead.phone),
+            LeadContact(lead_id=lead.id, email="extra-one@example.com", phone="111"),
+            LeadContact(lead_id=lead.id, email="extra-two@example.com", phone="222"),
+        ]
+    )
+    await db_session.flush()
+
+    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
+
+    contacts = await _contacts_for_account(db_session, account.id)
+    assert {c.email for c in contacts} == {
+        "convert-multi@example.com",
+        "extra-one@example.com",
+        "extra-two@example.com",
+    }
+    # LeadContact has no name field -- additional contacts inherit the lead's.
+    extra = next(c for c in contacts if c.email == "extra-one@example.com")
+    assert extra.first_name == "Selva"
+    assert extra.last_name == "Kumar"
+    assert extra.phone == "111"
+
+    links = (
+        await db_session.execute(select(ContactAccount).where(ContactAccount.account_id == account.id))
+    ).scalars().all()
+    assert sum(link.is_primary for link in links) == 1
 
 
 async def test_convert_lead_to_account_reuses_existing_contact_with_same_email(

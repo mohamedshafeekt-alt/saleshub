@@ -14,6 +14,7 @@ from app.models.contact_account import ContactAccount
 from app.models.deal import Deal
 from app.models.deal_stage import DealStage
 from app.models.enums import AuditAction, LeadTier
+from app.models.lead_contact import LeadContact
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from app.services.audit_service import log_audit
@@ -343,6 +344,34 @@ async def convert_lead_to_account(
         db.add(contact)
         await db.flush()
     db.add(ContactAccount(contact_id=contact.id, account_id=account.id, is_primary=True))
+
+    # Lead.contacts (added via "+ Add another email" on the lead) carry over
+    # too -- same reuse-by-email as the primary contact above, just
+    # non-primary. Skip the row that mirrors the lead's own email (already
+    # handled as the primary) and any lacking an email at all. LeadContact
+    # has no name field, so these inherit the lead's name, same convention
+    # as _add_contacts' nameless-extra-contact handling on direct Account
+    # creation.
+    lead_contacts = (
+        await db.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
+    ).scalars().all()
+    for lead_contact in lead_contacts:
+        if lead_contact.email is None or lead_contact.email == lead.email:
+            continue
+        extra_contact = (
+            await db.execute(select(Contact).where(Contact.email == lead_contact.email))
+        ).scalar_one_or_none()
+        if extra_contact is None:
+            extra_contact = Contact(
+                first_name=lead.first_name,
+                last_name=lead.last_name,
+                email=lead_contact.email,
+                phone=lead_contact.phone,
+            )
+            db.add(extra_contact)
+            await db.flush()
+        db.add(ContactAccount(contact_id=extra_contact.id, account_id=account.id, is_primary=False))
+
     await db.flush()
     await db.refresh(account, attribute_names=["owner", "contact_accounts", "deals"])
     await log_audit(
