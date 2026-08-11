@@ -16,6 +16,8 @@ ordering (oldest first); list_deals_for_account gated through the ACCOUNT's
 ownership rather than individual deal ownership; export_deals rows.
 """
 
+from datetime import date
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -346,6 +348,24 @@ async def test_list_deals_sorts_by_value_ascending(db_session: AsyncSession, mak
     results, _total = await list_deals(db_session, requester=rep, sort_by="value", sort_dir="asc")
 
     assert [deal.id for deal in results] == [low.id, high.id]
+
+
+async def test_list_deals_filters_by_created_at_range(db_session: AsyncSession, make_account, make_deal):
+    rep = await _make_user(db_session, "rep-deal-created-at@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Created At Filter Co")
+    early = await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Early Deal")
+    early.created_at = date(2026, 6, 1)
+    middle = await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Middle Deal")
+    middle.created_at = date(2026, 7, 10)
+    late = await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Late Deal")
+    late.created_at = date(2026, 8, 1)
+    await db_session.flush()
+
+    results, _total = await list_deals(
+        db_session, requester=rep, date_from=date(2026, 7, 1), date_to=date(2026, 7, 31)
+    )
+
+    assert [deal.id for deal in results] == [middle.id]
 
 
 # --- list_deals_board ------------------------------------------------------

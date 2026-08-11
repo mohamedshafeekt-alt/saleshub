@@ -2,7 +2,7 @@
 
 import secrets
 import string
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from fastapi import BackgroundTasks
@@ -115,6 +115,8 @@ async def list_users(
     is_active: bool | None = None,
     status: UserStatus | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[User]:
     filters: list[ColumnElement[bool]] = [User.is_delete.is_(False)]
     if role_id is not None:
@@ -139,6 +141,10 @@ async def list_users(
                 User.email.ilike(pattern),
             )
         )
+    if date_from is not None:
+        filters.append(User.created_at >= date_from)
+    if date_to is not None:
+        filters.append(User.created_at < date_to)
 
     result = await db.execute(
         select(User).where(*filters).order_by(User.first_name, User.last_name)

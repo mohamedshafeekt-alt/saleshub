@@ -4,6 +4,7 @@ board), ownership-checked get/update/delete, stage-transition history
 logging, cold-reason enforcement (driven by the referenced DealStage's
 `is_cold` flag, not a hardcoded enum comparison), and xlsx export rows."""
 
+from datetime import date
 from typing import Any, Literal
 
 from sqlalchemy import ColumnElement, delete, func, or_, select
@@ -157,6 +158,8 @@ def _deal_filters(
     stage_id: int | None,
     tier: list[LeadTier] | None,
     search: str | None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> tuple[list[Any], int | None, bool]:
     if DEALS_VIEW_ALL not in requester.permission_codes:
         owner_id = requester.id
@@ -170,6 +173,10 @@ def _deal_filters(
         filters.append(Deal.stage_id == stage_id)
     if tier:
         filters.append(Deal.tier.in_(tier))
+    if date_from is not None:
+        filters.append(Deal.created_at >= date_from)
+    if date_to is not None:
+        filters.append(Deal.created_at < date_to)
 
     needs_account_join = search is not None
     if search is not None:
@@ -193,6 +200,8 @@ async def list_deals(
     stage_id: int | None = None,
     tier: list[LeadTier] | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     sort_by: SortBy = "created_at",
     sort_dir: SortDir = "desc",
     limit: int = 20,
@@ -205,6 +214,8 @@ async def list_deals(
         stage_id=stage_id,
         tier=tier,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
     )
 
     count_query = select(func.count(Deal.id))
@@ -408,11 +419,20 @@ async def export_deals(
     stage_id: int | None = None,
     tier: list[LeadTier] | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """All deals matching the requester's role-scoping, ignoring any
     account_id filter (export is always cross-account). No pagination."""
     filters, _owner_id, _needs_join = _deal_filters(
-        requester=requester, owner_id=owner_id, account_id=None, stage_id=stage_id, tier=tier, search=search
+        requester=requester,
+        owner_id=owner_id,
+        account_id=None,
+        stage_id=stage_id,
+        tier=tier,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
     )
 
     owner_name = func.trim(

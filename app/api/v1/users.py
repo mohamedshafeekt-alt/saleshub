@@ -1,6 +1,8 @@
 """POST /users (admin-only user creation), GET /users (list, for owner assignment),
 GET/PATCH /users/me (own profile), POST /users/me/password (own password change)."""
 
+from datetime import date
+
 from fastapi import APIRouter, BackgroundTasks, Depends, File, HTTPException, Query, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -120,9 +122,16 @@ async def list_users_route(
     is_active: bool | None = Query(None),
     status: UserStatus | None = Query(None),
     search: str | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     db: AsyncSession = Depends(get_db),
 ) -> list[UserRead]:
-    users = await list_users(db, role_id=role_id, is_active=is_active, status=status, search=search)
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise HTTPException(status_code=422, detail="date_to must not be before date_from")
+    users = await list_users(
+        db, role_id=role_id, is_active=is_active, status=status, search=search,
+        date_from=date_from, date_to=date_to,
+    )
     return [UserRead.model_validate(user) for user in users]
 
 

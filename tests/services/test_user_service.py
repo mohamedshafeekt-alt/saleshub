@@ -1,5 +1,6 @@
 """User service: soft-delete, list filtering, profile updates, and password change."""
 
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -143,6 +144,23 @@ async def test_list_users_filters_by_status_deactivated(db_session: AsyncSession
     emails = {u.email for u in users}
     assert deactivated.email in emails
     assert active.email not in emails
+
+
+async def test_list_users_filters_by_created_at_range(db_session: AsyncSession):
+    before = await _make_user(db_session, "before-range-svc@example.com")
+    before.created_at = date(2026, 6, 1)
+    in_range = await _make_user(db_session, "in-range-svc@example.com")
+    in_range.created_at = date(2026, 7, 10)
+    after = await _make_user(db_session, "after-range-svc@example.com")
+    after.created_at = date(2026, 8, 1)
+    await db_session.flush()
+
+    users = await list_users(db_session, date_from=date(2026, 7, 1), date_to=date(2026, 7, 31))
+
+    emails = {u.email for u in users}
+    assert emails == {in_range.email}
+    assert before.email not in emails
+    assert after.email not in emails
 
 
 async def test_soft_delete_user_sets_is_active_false(db_session: AsyncSession):

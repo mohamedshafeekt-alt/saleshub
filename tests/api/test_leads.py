@@ -205,6 +205,17 @@ async def test_create_lead_notifies_admin_by_email(
     assert any(call["to"] == admin.email for call in fake_email_sender.calls)
 
 
+async def test_list_leads_rejects_date_to_before_date_from(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-bad-date-range-leads@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(
+        LEADS_URL, params={"date_from": "2026-09-11", "date_to": "2026-08-11"}, headers=headers
+    )
+
+    assert response.status_code == 422
+
+
 async def test_list_leads_as_delivery_sme_returns_200(client: AsyncClient, make_user, auth_headers):
     sme = await make_user(email="sme-list@example.com", role=UserRole.DELIVERY_SME)
     headers = auth_headers(sme)

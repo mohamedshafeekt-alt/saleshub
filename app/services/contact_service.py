@@ -9,6 +9,7 @@ not ownership-scoped. Account-scoped contact creation/update (with the
 is_primary flag) lives in contact_account_service.py instead.
 """
 
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -181,6 +182,8 @@ async def list_contacts(
     tier: LeadTier | None = None,
     is_primary: bool | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[tuple[Contact, ContactAccount | None]], int]:
@@ -189,8 +192,10 @@ async def list_contacts(
     more than one Account) -- e.g. owner_id matches contacts with at least
     one link to an Account owned by that user, regardless of which linked
     Account ends up as the display representative below. search matches
-    first/last name or email. Each result pairs the Contact with its single
-    representative Account link (see _primary_account_link) for display."""
+    first/last name or email. date_from/date_to filter on the Contact row's
+    own created_at (not the link's). Each result pairs the Contact with its
+    single representative Account link (see _primary_account_link) for
+    display."""
     filters: list[Any] = []
     if search is not None:
         pattern = f"%{search}%"
@@ -201,6 +206,10 @@ async def list_contacts(
                 Contact.email.ilike(pattern),
             )
         )
+    if date_from is not None:
+        filters.append(Contact.created_at >= date_from)
+    if date_to is not None:
+        filters.append(Contact.created_at < date_to)
 
     if owner_id is not None or account_id is not None or tier is not None or is_primary is not None:
         link_query = select(ContactAccount.id).where(ContactAccount.contact_id == Contact.id)
@@ -241,6 +250,8 @@ async def export_contacts(
     tier: LeadTier | None = None,
     is_primary: bool | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """All contacts matching list_contacts's filters. No dedicated
     no-pagination query -- reuses list_contacts with a large limit.
@@ -254,6 +265,8 @@ async def export_contacts(
         tier=tier,
         is_primary=is_primary,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
         limit=1_000_000,
         offset=0,
     )

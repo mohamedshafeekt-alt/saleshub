@@ -63,6 +63,7 @@ class NotificationType(str, enum.Enum):
     DEAL_STAGE_CHANGED = "deal_stage_changed"
     LEAD_ASSIGNED = "lead_assigned"
     NEW_LEAD = "new_lead"
+    LEAD_CONVERTED = "lead_converted"
 
 
 class AuditAction(str, enum.Enum):

@@ -6,7 +6,7 @@ source exact-match filter; search across company + owner name;
 not-found/forbidden checks on get/update/delete; partial update; delete.
 """
 
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 from sqlalchemy import select
@@ -398,6 +398,23 @@ async def test_list_leads_filters_by_source(db_session: AsyncSession, make_lead)
     results, _total = await list_leads(db_session, requester=owner, source=LeadSource.WEBSITE)
 
     assert [lead.id for lead in results] == [website_lead.id]
+
+
+async def test_list_leads_filters_by_created_at_range(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-date-range@example.com", UserRole.SALES_REP)
+    before = await make_lead(owner_id=owner.id, email="before-range@example.com")
+    in_range = await make_lead(owner_id=owner.id, email="in-range@example.com")
+    after = await make_lead(owner_id=owner.id, email="after-range@example.com")
+    before.created_at = date(2026, 6, 1)
+    in_range.created_at = date(2026, 7, 10)
+    after.created_at = date(2026, 8, 1)
+    await db_session.flush()
+
+    results, _total = await list_leads(
+        db_session, requester=owner, date_from=date(2026, 7, 1), date_to=date(2026, 7, 31)
+    )
+
+    assert [lead.id for lead in results] == [in_range.id]
 
 
 async def test_list_leads_search_matches_company_name(db_session: AsyncSession, make_lead):

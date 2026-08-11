@@ -139,6 +139,8 @@ async def list_deals_route(
     stage_id: int | None = Query(None),
     tier: list[LeadTier] | None = Query(None),
     search: str | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     sort_by: Literal["value", "expected_close_date", "created_at"] = Query("created_at"),
     sort_dir: Literal["asc", "desc"] = Query("desc"),
     limit: int = Query(20),
@@ -147,9 +149,18 @@ async def list_deals_route(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DealsListResponse | StreamingResponse:
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise HTTPException(status_code=422, detail="date_to must not be before date_from")
     if to_export:
         rows = await export_deals(
-            db, requester=current_user, owner_id=owner_id, stage_id=stage_id, tier=tier, search=search
+            db,
+            requester=current_user,
+            owner_id=owner_id,
+            stage_id=stage_id,
+            tier=tier,
+            search=search,
+            date_from=date_from,
+            date_to=date_to,
         )
         buffer = rows_to_xlsx(
             [
@@ -206,6 +217,8 @@ async def list_deals_route(
         stage_id=stage_id,
         tier=tier,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
         sort_by=sort_by,
         sort_dir=sort_dir,
         limit=limit,

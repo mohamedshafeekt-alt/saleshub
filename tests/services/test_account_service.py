@@ -16,13 +16,15 @@ conversion, reuses lead_service's not-found/forbidden checks, and honors
 explicit tier/owner_id overrides.
 """
 
+from datetime import date
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
-from app.models.enums import LeadTier
+from app.models.enums import LeadTier, NotificationType
 from app.models.lead_contact import LeadContact
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
@@ -335,6 +337,23 @@ async def test_list_accounts_filters_by_tier(db_session: AsyncSession, make_acco
     results, _total = await list_accounts(db_session, requester=owner, tier=LeadTier.GOLD)
 
     assert [account.id for account in results] == [gold_account.id]
+
+
+async def test_list_accounts_filters_by_created_at_range(db_session: AsyncSession, make_account):
+    owner = await _make_user(db_session, "owner-date-range-acc@example.com", UserRole.SALES_REP)
+    early = await make_account(owner_id=owner.id, company="Early Co")
+    middle = await make_account(owner_id=owner.id, company="Middle Co")
+    late = await make_account(owner_id=owner.id, company="Late Co")
+    early.created_at = date(2026, 6, 1)
+    middle.created_at = date(2026, 7, 10)
+    late.created_at = date(2026, 8, 1)
+    await db_session.flush()
+
+    results, _total = await list_accounts(
+        db_session, requester=owner, date_from=date(2026, 7, 1), date_to=date(2026, 7, 31)
+    )
+
+    assert [account.id for account in results] == [middle.id]
 
 
 async def test_list_accounts_search_matches_company_name(db_session: AsyncSession, make_account):
@@ -769,6 +788,23 @@ async def test_convert_lead_to_account_writes_audit_log_for_both_lead_and_accoun
         )
     ).scalar_one()
     assert "converted" in lead_entry.description.lower()
+
+
+async def test_convert_lead_to_account_notifies_the_new_owner(db_session: AsyncSession, make_lead):
+    from app.models.notification import Notification
+
+    owner = await _make_user(db_session, "owner-convert-notify@example.com", UserRole.SALES_REP)
+    lead = await make_lead(
+        owner_id=owner.id, email="convert-notify@example.com", company="Notify Co"
+    )
+
+    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
+
+    result = await db_session.execute(select(Notification).where(Notification.recipient_id == owner.id))
+    notification = result.scalar_one()
+    assert notification.type == NotificationType.LEAD_CONVERTED
+    assert notification.entity_type == "account"
+    assert notification.entity_id == account.id
 
 
 async def test_convert_lead_to_account_raises_for_already_converted_lead(

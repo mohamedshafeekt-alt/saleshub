@@ -1,6 +1,7 @@
 """Account business logic: role-scoped listing/search, ownership-checked
 get/update/delete, and Lead -> Account conversion."""
 
+from datetime import date
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -13,13 +14,14 @@ from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
 from app.models.deal import Deal
 from app.models.deal_stage import DealStage
-from app.models.enums import AuditAction, LeadTier
+from app.models.enums import AuditAction, LeadTier, NotificationType
 from app.models.lead_contact import LeadContact
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from app.services.audit_service import log_audit
 from app.services.contact_service import DuplicateContactEmailError
 from app.services.lead_service import get_lead
+from app.services.notification_service import create_notification
 
 _EAGER_LOAD_OPTIONS = (
     selectinload(Account.owner),
@@ -142,6 +144,8 @@ async def list_accounts(
     tier: LeadTier | None = None,
     industry: str | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[Account], int]:
@@ -155,6 +159,10 @@ async def list_accounts(
         filters.append(Account.tier == tier)
     if industry is not None:
         filters.append(Account.industry == industry)
+    if date_from is not None:
+        filters.append(Account.created_at >= date_from)
+    if date_to is not None:
+        filters.append(Account.created_at < date_to)
     if search is not None:
         pattern = f"%{search}%"
         filters.append(
@@ -188,6 +196,8 @@ async def export_accounts(
     tier: LeadTier | None = None,
     industry: str | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """All accounts matching the requester's role-scoping (same rule as
     list_accounts). No dedicated no-pagination query -- reuses
@@ -202,6 +212,8 @@ async def export_accounts(
         tier=tier,
         industry=industry,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
         limit=1_000_000,
         offset=0,
     )
@@ -317,6 +329,7 @@ async def convert_lead_to_account(
         raise LeadMissingFieldsForConversionError(
             f"Lead {lead_id} is missing required field(s) for conversion: {', '.join(missing)}"
         )
+    assert resolved_owner_id is not None  # narrows for mypy; the missing-fields check above guarantees this
 
     account = Account(
         company=lead.company,
@@ -374,6 +387,18 @@ async def convert_lead_to_account(
 
     await db.flush()
     await db.refresh(account, attribute_names=["owner", "contact_accounts", "deals"])
+
+    await create_notification(
+        db,
+        recipient_id=resolved_owner_id,
+        type=NotificationType.LEAD_CONVERTED,
+        title="Lead converted to account",
+        body=f"{lead.name} at {lead.company} was converted to an account.",
+        actor_id=requester.id,
+        entity_type="account",
+        entity_id=account.id,
+    )
+
     await log_audit(
         db, table_name="accounts", record_id=account.id, action=AuditAction.CREATED,
         actor_id=requester.id,

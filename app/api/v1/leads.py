@@ -87,15 +87,26 @@ async def list_leads_route(
     source: LeadSource | None = Query(None),
     lead_status: LeadStatus | None = Query(None, alias="status"),
     search: str | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     limit: int = Query(20),
     offset: int = Query(0),
     to_export: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Page[LeadRead] | StreamingResponse:
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise HTTPException(status_code=422, detail="date_to must not be before date_from")
     if to_export:
         rows = await export_leads(
-            db, requester=current_user, owner_id=owner_id, source=source, status=lead_status, search=search
+            db,
+            requester=current_user,
+            owner_id=owner_id,
+            source=source,
+            status=lead_status,
+            search=search,
+            date_from=date_from,
+            date_to=date_to,
         )
         buffer = rows_to_xlsx(
             ["Name", "Email", "Phone", "Company", "Source", "Status", "Owner"],
@@ -126,6 +137,8 @@ async def list_leads_route(
         source=source,
         status=lead_status,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
         offset=offset,
     )
