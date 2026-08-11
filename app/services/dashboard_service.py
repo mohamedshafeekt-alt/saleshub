@@ -152,7 +152,7 @@ async def get_summary(
 
     return DashboardSummary(
         leads_generated=DashboardTile(value=leads_now, change_pct=_change_pct(leads_now, leads_prev)),
-        qualified_leads=DashboardTile(value=qualified_now, change_pct=_change_pct(qualified_now, qualified_prev)),
+        leads_to_accounts=DashboardTile(value=qualified_now, change_pct=_change_pct(qualified_now, qualified_prev)),
         deals_in_pipeline=DashboardTile(value=pipeline_now, change_pct=_change_pct(pipeline_now, pipeline_prev)),
         deals_closed=DashboardTile(value=closed_now, change_pct=_change_pct(closed_now, closed_prev)),
         num_accounts=DashboardTile(value=accounts_now, change_pct=_change_pct(accounts_now, accounts_prev)),

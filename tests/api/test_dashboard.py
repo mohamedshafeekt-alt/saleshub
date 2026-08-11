@@ -56,7 +56,7 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     assert response.status_code == 200
     summary = response.json()["summary"]
     assert summary["leads_generated"]["value"] == 2
-    assert summary["qualified_leads"]["value"] == 1
+    assert summary["leads_to_accounts"]["value"] == 1
     # deals_in_pipeline = open deals opened this period — the 2020 deal must not count.
     assert summary["deals_in_pipeline"]["value"] == 1
     # Only Closed Won counts as "closed" — the Closed Lost deal above must not.

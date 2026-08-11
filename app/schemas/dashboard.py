@@ -13,7 +13,7 @@ class DashboardTile(BaseModel):
 
 class DashboardSummary(BaseModel):
     leads_generated: DashboardTile
-    qualified_leads: DashboardTile
+    leads_to_accounts: DashboardTile
     deals_in_pipeline: DashboardTile
     deals_closed: DashboardTile
     num_accounts: DashboardTile
