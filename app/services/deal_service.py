@@ -201,12 +201,15 @@ def _deal_filters(
         filters.append(~Deal.stage.has(is_terminal_stage()))
     elif stage_state == "closed":
         filters.append(Deal.stage.has(is_terminal_stage()))
-    elif date_field == "closed_at":
-        # date_field=closed_at with no explicit stage_state is the dashboard's
-        # "Deals Closed" tile drill-down (dashboard_service._count_deals_closed),
-        # which is Closed Won only -- not "any terminal stage". Without this,
-        # a Closed Lost or cold deal that closed in the same window silently
-        # padded the drill-down past the tile's own count.
+    elif date_field == "closed_at" and not stage_id:
+        # date_field=closed_at with no explicit stage_state or stage_id is the
+        # dashboard's "Deals Closed" tile drill-down
+        # (dashboard_service._count_deals_closed), which is Closed Won only --
+        # not "any terminal stage". Without this, a Closed Lost or cold deal
+        # that closed in the same window silently padded the drill-down past
+        # the tile's own count. A caller pinning stage_id explicitly (e.g. the
+        # funnel's Closed Lost/Cold bars) already says exactly which stage it
+        # wants, so this default is skipped rather than conflicting with it.
         filters.append(Deal.stage.has(DealStage.name == CLOSED_WON_STAGE_NAME))
 
     if date_field == "closed_at":
