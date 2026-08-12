@@ -18,7 +18,7 @@ contact's linked accounts satisfies them; search matches name/email;
 pagination; contacts with zero linked accounts still appear when unfiltered.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -411,6 +411,25 @@ async def test_list_contacts_filters_by_created_at_range(db_session: AsyncSessio
 
     assert total == 1
     assert [contact.id for contact, _link in items] == [in_range.id]
+
+
+async def test_list_contacts_date_to_includes_contacts_created_on_the_end_date(db_session: AsyncSession):
+    """date_to is inclusive -- see account_service.list_accounts for why."""
+    actor = await _make_user(db_session, "actor-date-to-inclusive@example.com", UserRole.SALES_REP)
+    on_end_date = await create_contact(
+        db_session, ContactCreate(first_name="OnEndDate", email="on-end-date@example.com"), requester=actor
+    )
+    on_end_date.created_at = datetime(2026, 8, 11, 15, 30)
+    after_end_date = await create_contact(
+        db_session, ContactCreate(first_name="AfterEndDate", email="after-end-date@example.com"), requester=actor
+    )
+    after_end_date.created_at = datetime(2026, 8, 12, 9, 0)
+    await db_session.flush()
+
+    items, total = await list_contacts(db_session, date_from=date(2026, 8, 1), date_to=date(2026, 8, 11))
+
+    assert total == 1
+    assert [contact.id for contact, _link in items] == [on_end_date.id]
 
 
 async def test_list_contacts_owner_filter_matches_any_of_multiple_linked_accounts(

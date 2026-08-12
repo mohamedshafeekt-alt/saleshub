@@ -417,6 +417,21 @@ async def test_list_leads_filters_by_created_at_range(db_session: AsyncSession, 
     assert [lead.id for lead in results] == [in_range.id]
 
 
+async def test_list_leads_date_to_includes_leads_created_on_the_end_date(db_session: AsyncSession, make_lead):
+    """date_to is inclusive -- see account_service.list_accounts for why."""
+    owner = await _make_user(db_session, "owner-date-to-inclusive@example.com", UserRole.SALES_REP)
+    on_end_date = await make_lead(
+        owner_id=owner.id, email="on-end-date@example.com", created_at=datetime(2026, 8, 11, 15, 30)
+    )
+    await make_lead(owner_id=owner.id, email="after-end-date@example.com", created_at=datetime(2026, 8, 12, 9, 0))
+
+    results, _total = await list_leads(
+        db_session, requester=owner, date_from=date(2026, 8, 1), date_to=date(2026, 8, 11)
+    )
+
+    assert [lead.id for lead in results] == [on_end_date.id]
+
+
 async def test_list_leads_search_matches_company_name(db_session: AsyncSession, make_lead):
     manager = await _make_user(db_session, "manager-search1@example.com", UserRole.SALES_MANAGER)
     owner = await _make_user(db_session, "owner-search1@example.com", UserRole.SALES_REP)

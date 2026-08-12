@@ -2,7 +2,7 @@
 
 import secrets
 import string
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import BackgroundTasks
@@ -144,7 +144,8 @@ async def list_users(
     if date_from is not None:
         filters.append(User.created_at >= date_from)
     if date_to is not None:
-        filters.append(User.created_at < date_to)
+        # Inclusive -- see account_service.list_accounts for why.
+        filters.append(User.created_at < date_to + timedelta(days=1))
 
     result = await db.execute(
         select(User).where(*filters).order_by(User.first_name, User.last_name)

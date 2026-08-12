@@ -181,7 +181,7 @@ This document consolidates all functional requirements into a single reference c
 
 ### 4.12 Sales Performance Dashboard
 
-**Elements:** Metric tiles (leads generated, qualified leads, meetings, proposals sent, closures), funnel chart, Target vs. Actual chart, filters (date range, owner, tier).
+**Elements:** Metric tiles (leads generated, Leads to Accounts, meetings, proposals sent, closures), funnel chart, Target vs. Actual chart, filters (date range, owner, tier).
 
 **Functionality:** Reporting and performance tracking.
 

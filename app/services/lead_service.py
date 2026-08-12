@@ -1,7 +1,7 @@
 """Lead business logic: creation (with duplicate-email guard), role-scoped
 listing/search, and ownership-checked get/update/delete."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from fastapi import BackgroundTasks
@@ -166,7 +166,8 @@ async def list_leads(
     if date_from is not None:
         filters.append(Lead.created_at >= date_from)
     if date_to is not None:
-        filters.append(Lead.created_at < date_to)
+        # Inclusive -- see account_service.list_accounts for why.
+        filters.append(Lead.created_at < date_to + timedelta(days=1))
 
     count_query = select(func.count(Lead.id)).where(*filters)
     items_query = (
@@ -218,7 +219,8 @@ async def export_leads(
     if date_from is not None:
         filters.append(Lead.created_at >= date_from)
     if date_to is not None:
-        filters.append(Lead.created_at < date_to)
+        # Inclusive -- see account_service.list_accounts for why.
+        filters.append(Lead.created_at < date_to + timedelta(days=1))
 
     result = await db.execute(
         select(Lead)

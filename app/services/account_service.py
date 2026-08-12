@@ -1,7 +1,7 @@
 """Account business logic: role-scoped listing/search, ownership-checked
 get/update/delete, and Lead -> Account conversion."""
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -162,7 +162,11 @@ async def list_accounts(
     if date_from is not None:
         filters.append(Account.created_at >= date_from)
     if date_to is not None:
-        filters.append(Account.created_at < date_to)
+        # Inclusive, matching the dashboard's `num_accounts` tile
+        # (dashboard_service._count_accounts) -- it used to be exclusive,
+        # silently dropping accounts created on the requested end date and
+        # undercounting against the tile for the same range.
+        filters.append(Account.created_at < date_to + timedelta(days=1))
     if search is not None:
         pattern = f"%{search}%"
         filters.append(

@@ -9,7 +9,7 @@ not ownership-scoped. Account-scoped contact creation/update (with the
 is_primary flag) lives in contact_account_service.py instead.
 """
 
-from datetime import date
+from datetime import date, timedelta
 from typing import Any
 
 from sqlalchemy import func, or_, select
@@ -209,7 +209,8 @@ async def list_contacts(
     if date_from is not None:
         filters.append(Contact.created_at >= date_from)
     if date_to is not None:
-        filters.append(Contact.created_at < date_to)
+        # Inclusive -- see account_service.list_accounts for why.
+        filters.append(Contact.created_at < date_to + timedelta(days=1))
 
     if owner_id is not None or account_id is not None or tier is not None or is_primary is not None:
         link_query = select(ContactAccount.id).where(ContactAccount.contact_id == Contact.id)

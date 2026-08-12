@@ -214,7 +214,16 @@ def _deal_filters(
 
     if date_field == "closed_at":
         if date_from is not None or date_to is not None:
-            filters.append(entered_current_stage_in(date_from, date_to))
+            # Open stages stay unscoped by date here too -- same `in_scope` rule
+            # dashboard_service.get_funnel uses for its open-stage bars, which are
+            # a live count regardless of period. Without the `~is_terminal_stage()`
+            # half, a deal still sitting in e.g. Qualified to Buy or Evaluation
+            # dropped out of a date-filtered deals list even though the funnel
+            # counted it for that same range (period-agnostic for open stages),
+            # so the two disagreed on open-stage counts for an identical window.
+            # A terminal stage's `entered_current_stage_in` date is its real close
+            # date, so that half is unaffected.
+            filters.append(or_(~Deal.stage.has(is_terminal_stage()), entered_current_stage_in(date_from, date_to)))
     else:
         if date_from is not None:
             filters.append(Deal.created_at >= date_from)

@@ -293,12 +293,16 @@ async def test_list_deals_date_to_includes_deals_created_on_the_end_date(
     assert [item["id"] for item in response.json()["items"]] == [on_end_date.id]
 
 
-async def test_list_deals_closed_at_filters_by_stage_entry_not_creation(
+async def test_list_deals_closed_at_filters_terminal_stages_by_entry_and_leaves_open_stages_unscoped(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change
 ):
-    """date_field=closed_at dates a deal by when it entered its current terminal
-    stage — the lens the dashboard's Deals Closed tile counts with. Open deals
-    drop out entirely, whatever their created_at."""
+    """date_field=closed_at dates a TERMINAL deal by when it entered that stage —
+    the lens the dashboard's Deals Closed tile counts with. An open-stage deal is
+    left unscoped by the date range instead of dropping out entirely, matching
+    dashboard_service.get_funnel's open-stage bars, which are a live count
+    regardless of period -- without this, a deal sitting in e.g. Evaluation
+    disappeared from a date-filtered deals list while the funnel still counted
+    it for that same range, so the two disagreed on open-stage counts."""
     from datetime import datetime
 
     rep = await make_user(email="rep-closed-at@example.com", role=UserRole.SALES_REP)
@@ -312,25 +316,33 @@ async def test_list_deals_closed_at_filters_by_stage_entry_not_creation(
         stage_id=open_stage.id, created_at=datetime(2020, 1, 1),
     )
     await make_stage_change(closed_in_window, to_stage_id=won_stage.id, at=datetime(2026, 8, 5, 12, 0))
-    # Created inside the window, closed outside it — created_at would wrongly include this.
+    # Terminal, but closed OUTSIDE the window -- still excluded; only open stages
+    # skip date-scoping, not terminal ones just because they're not Closed Won.
     closed_later = await make_deal(
         account_id=account.id, owner_id=rep.id, deal_name="New Deal Later Win",
         stage_id=open_stage.id, created_at=datetime(2026, 8, 3, 9, 0),
     )
     await make_stage_change(closed_later, to_stage_id=won_stage.id, at=datetime(2026, 9, 5, 12, 0))
-    # Created inside the window, never closed — must not appear under a close filter.
+    # Open stage, never closed -- included regardless of date, live-snapshot rule.
     still_open = await make_deal(
         account_id=account.id, owner_id=rep.id, deal_name="Still Open",
         stage_id=open_stage.id, created_at=datetime(2026, 8, 4, 9, 0),
     )
     headers = auth_headers(rep)
     window = {"date_from": "2026-08-01", "date_to": "2026-08-31"}
+    # Explicit stage_id (every stage) -- the Deals list frontend always sends
+    # this rather than omitting it, precisely so `closed_at` doesn't fall back
+    # to the Closed-Won-only default meant for the dashboard tile drill-down
+    # (see the `not stage_id` branch above and its own test).
+    all_stages = {"stage_id": [open_stage.id, won_stage.id]}
 
-    closed = await client.get(DEALS_URL, params={**window, "date_field": "closed_at"}, headers=headers)
+    closed = await client.get(
+        DEALS_URL, params={**window, **all_stages, "date_field": "closed_at"}, headers=headers
+    )
     created = await client.get(DEALS_URL, params=window, headers=headers)
 
     assert closed.status_code == 200
-    assert [item["id"] for item in closed.json()["items"]] == [closed_in_window.id]
+    assert {item["id"] for item in closed.json()["items"]} == {closed_in_window.id, still_open.id}
     # Same range, other lens: the two genuinely answer different questions.
     assert created.status_code == 200
     assert {item["id"] for item in created.json()["items"]} == {closed_later.id, still_open.id}
