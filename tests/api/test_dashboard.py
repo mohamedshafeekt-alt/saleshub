@@ -227,7 +227,7 @@ async def test_dashboard_funnel_live_counts_open_stages_and_period_scopes_termin
 
 
 async def test_dashboard_deal_distribution_groups_by_tier_within_period(
-    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, db_session
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
 ):
     from datetime import datetime
 
@@ -237,20 +237,36 @@ async def test_dashboard_deal_distribution_groups_by_tier_within_period(
     headers = auth_headers(user)
     account = await make_account(owner_id=user.id, company="DistCo")
     stage = await make_deal_stage(name="Evaluation", sort_order=0)
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.GOLD, value=1000)
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.GOLD, value=500)
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.SILVER, value=200)
-    old_deal = await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.SILVER, value=999)
-    old_deal.created_at = datetime(2020, 1, 1)
-    await db_session.flush()
-    await db_session.commit()
+    # `with_history=True` -- distribution is now scoped by `entered_current_stage_in`
+    # (deal_stage_history), not `created_at`, so it agrees with `GET
+    # /deals?date_field=closed_at` for the same range (was created_at-scoped,
+    # which counted a different set of deals than that list view).
+    await make_deal(
+        account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.GOLD, value=1000, with_history=True
+    )
+    await make_deal(
+        account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.GOLD, value=500, with_history=True
+    )
+    await make_deal(
+        account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.SILVER, value=200, with_history=True
+    )
+    # Entered its (only) stage in 2020 -- outside the current-month window.
+    await make_deal(
+        account_id=account.id,
+        owner_id=user.id,
+        stage_id=stage.id,
+        tier=LeadTier.SILVER,
+        value=999,
+        with_history=True,
+        created_at=datetime(2020, 1, 1),
+    )
 
     response = await client.get("/api/v1/dashboard", headers=headers)
 
     assert response.status_code == 200
     entries = {e["tier"]: e for e in response.json()["deal_distribution"]["entries"]}
     assert entries["gold"] == {"tier": "gold", "count": 2, "total_value": 1500.0}
-    # Silver excludes the deal created outside the current-month window.
+    # Silver excludes the deal that entered its stage outside the current-month window.
     assert entries["silver"] == {"tier": "silver", "count": 1, "total_value": 200.0}
 
 

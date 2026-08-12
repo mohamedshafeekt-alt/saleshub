@@ -16,7 +16,7 @@ conversion, reuses lead_service's not-found/forbidden checks, and honors
 explicit tier/owner_id overrides.
 """
 
-from datetime import date
+from datetime import date, datetime
 
 import pytest
 from sqlalchemy import select
@@ -354,6 +354,25 @@ async def test_list_accounts_filters_by_created_at_range(db_session: AsyncSessio
     )
 
     assert [account.id for account in results] == [middle.id]
+
+
+async def test_list_accounts_date_to_includes_accounts_created_on_the_end_date(
+    db_session: AsyncSession, make_account
+):
+    """date_to is inclusive, matching the dashboard's `num_accounts` tile
+    (dashboard_service._count_accounts). It used to be exclusive
+    (`created_at < date_to`), so an account created on the very day the
+    caller asked for was dropped, undercounting against the tile for the
+    same range."""
+    owner = await _make_user(db_session, "owner-date-to-inclusive@example.com", UserRole.SALES_REP)
+    on_end_date = await make_account(owner_id=owner.id, company="EndDateCo", created_at=datetime(2026, 8, 11, 15, 30))
+    await make_account(owner_id=owner.id, company="AfterCo", created_at=datetime(2026, 8, 12, 9, 0))
+
+    results, _total = await list_accounts(
+        db_session, requester=owner, date_from=date(2026, 8, 1), date_to=date(2026, 8, 11)
+    )
+
+    assert [account.id for account in results] == [on_end_date.id]
 
 
 async def test_list_accounts_search_matches_company_name(db_session: AsyncSession, make_account):

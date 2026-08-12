@@ -211,14 +211,22 @@ async def get_deal_distribution(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> DealDistributionResponse:
+    # Scoped by `entered_current_stage_in` (deal_stage_history), not
+    # `created_at` -- same predicate _count_deals_closed/get_funnel use for
+    # their terminal-stage bars, and the one `GET /deals?date_field=closed_at`
+    # applies when a rep browses this same range on the Deals list. Was
+    # `created_at`-scoped, which counted a different set of deals than that
+    # list view for an identical date range (a deal created in-period but
+    # still open showed here but not there, and vice versa for one created
+    # earlier but moved stages in-period) -- reported as the tile and the
+    # list disagreeing for the same range.
     today = date.today()
     start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
     result = await db.execute(
         select(Deal.tier, func.count(Deal.id), func.coalesce(func.sum(Deal.value), 0))
         .where(
             Deal.tier.is_not(None),
-            Deal.created_at >= start,
-            Deal.created_at < end + timedelta(days=1),
+            entered_current_stage_in(start, end),
         )
         .group_by(Deal.tier)
     )
