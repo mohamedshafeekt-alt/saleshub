@@ -16,7 +16,7 @@ from app.models.account import Account
 from app.models.contact import Contact
 from app.models.deal import Deal
 from app.models.deal_contact import DealContact
-from app.models.deal_stage import CLOSED_LOST_STAGE_NAME, DealStage, is_terminal_stage
+from app.models.deal_stage import CLOSED_LOST_STAGE_NAME, CLOSED_WON_STAGE_NAME, DealStage, is_terminal_stage
 from app.models.deal_stage_history import DealStageHistory, entered_current_stage_in
 from app.models.enums import AuditAction, LeadTier, NotificationType
 from app.models.user import User
@@ -185,11 +185,10 @@ def _deal_filters(
         filters.append(Deal.stage_id.in_(stage_id))
     if tier:
         filters.append(Deal.tier.in_(tier))
-    # A deal is "closed" when it currently sits in a terminal stage (Closed Won,
-    # Closed Lost, or any cold stage). `.has()` keeps this a correlated EXISTS so
-    # it works whether or not the caller already joined DealStage (list and board
-    # don't, export does). date_field=closed_at implies it -- dating a deal by its
-    # close only makes sense for deals that have one.
+    # `stage_state="closed"` means "any terminal stage" (Closed Won, Closed
+    # Lost, or cold) -- a general closed-deals filter. `.has()` keeps this a
+    # correlated EXISTS so it works whether or not the caller already joined
+    # DealStage (list and board don't, export does).
     #
     # ponytail: this reads the deal's stage RIGHT NOW, so it reproduces the
     # dashboard's Deals in Pipeline tile only when the period ends today
@@ -200,8 +199,15 @@ def _deal_filters(
     # start mattering.
     if stage_state == "open":
         filters.append(~Deal.stage.has(is_terminal_stage()))
-    elif stage_state == "closed" or date_field == "closed_at":
+    elif stage_state == "closed":
         filters.append(Deal.stage.has(is_terminal_stage()))
+    elif date_field == "closed_at":
+        # date_field=closed_at with no explicit stage_state is the dashboard's
+        # "Deals Closed" tile drill-down (dashboard_service._count_deals_closed),
+        # which is Closed Won only -- not "any terminal stage". Without this,
+        # a Closed Lost or cold deal that closed in the same window silently
+        # padded the drill-down past the tile's own count.
+        filters.append(Deal.stage.has(DealStage.name == CLOSED_WON_STAGE_NAME))
 
     if date_field == "closed_at":
         if date_from is not None or date_to is not None:

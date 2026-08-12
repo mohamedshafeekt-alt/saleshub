@@ -381,6 +381,48 @@ async def test_dashboard_deals_closed_tile_matches_deals_list_closed_at_drill_do
     assert won_bar["count"] == tile
 
 
+async def test_dashboard_deals_closed_drill_down_excludes_lost_and_cold_deals(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change, db_session
+):
+    """The tile only counts Closed Won (dashboard_service._count_deals_closed).
+
+    date_field=closed_at alone -- no stage_id needed -- has to carry that same
+    Closed-Won-only meaning, since that's the drill-down the dashboard's "Deals
+    Closed" tile actually links to. It used to fall back to "any terminal stage"
+    (Closed Won, Closed Lost, or cold), which folded lost/cold deals closed in
+    the same period into a tile-labelled drill-down that never counted them.
+    """
+    from datetime import date, datetime
+
+    user = await make_user(email="drilldown-lost@example.com", role=UserRole.SALES_MANAGER)
+    headers = auth_headers(user)
+    account = await make_account(owner_id=user.id, company="DrillLostCo")
+    open_stage = await make_deal_stage(name="Contracts", sort_order=4)
+    won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
+    lost_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Lost", sort_order=6)
+
+    win = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=1000)
+    await make_stage_change(win, to_stage_id=won_stage.id, at=datetime.now())
+    lost = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=500)
+    await make_stage_change(lost, to_stage_id=lost_stage.id, at=datetime.now())
+    await db_session.flush()
+    await db_session.commit()
+
+    dashboard = await client.get("/api/v1/dashboard", headers=headers)
+    tile = dashboard.json()["summary"]["deals_closed"]["value"]
+    assert tile == 1
+
+    today = date.today()
+    drill_down = await client.get(
+        f"/api/v1/deals?view=list&date_field=closed_at"
+        f"&date_from={today.replace(day=1)}&date_to={today}",
+        headers=headers,
+    )
+    assert drill_down.status_code == 200
+    assert drill_down.json()["total"] == tile
+    assert {item["id"] for item in drill_down.json()["items"]} == {win.id}
+
+
 async def test_dashboard_deals_closed_excludes_a_deal_reopened_out_of_closed_won(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change, db_session
 ):
