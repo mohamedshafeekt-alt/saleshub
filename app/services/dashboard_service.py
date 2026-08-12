@@ -195,13 +195,18 @@ async def get_funnel(
     start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
     in_scope = or_(~is_terminal_stage(), entered_current_stage_in(start, end))
     result = await db.execute(
-        select(DealStage.name, func.count(Deal.id))
+        select(DealStage.id, DealStage.name, is_terminal_stage(), func.count(Deal.id))
         .select_from(DealStage)
         .join(Deal, and_(Deal.stage_id == DealStage.id, in_scope), isouter=True)
         .group_by(DealStage.id, DealStage.name, DealStage.sort_order)
         .order_by(DealStage.sort_order)
     )
-    return FunnelResponse(stages=[FunnelStage(stage_name=name, count=count) for name, count in result.all()])
+    return FunnelResponse(
+        stages=[
+            FunnelStage(stage_id=stage_id, stage_name=name, is_terminal=is_terminal, count=count)
+            for stage_id, name, is_terminal, count in result.all()
+        ]
+    )
 
 
 async def get_deal_distribution(
