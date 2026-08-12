@@ -3,6 +3,7 @@ no single owning account; see contact_service.py's module docstring). Use
 POST/PUT /accounts/{account_id}/contacts (app/api/v1/accounts.py) to create
 or update a contact together with its account link and is_primary flag."""
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
@@ -114,14 +115,25 @@ async def list_contacts_route(
     tier: LeadTier | None = Query(None),
     is_primary: bool | None = Query(None),
     search: str | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
     limit: int = Query(20),
     offset: int = Query(0),
     to_export: bool = Query(False),
     db: AsyncSession = Depends(get_db),
 ) -> Page[ContactListItemRead] | StreamingResponse:
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise HTTPException(status_code=422, detail="date_to must not be before date_from")
     if to_export:
         rows = await export_contacts(
-            db, owner_id=owner_id, account_id=account_id, tier=tier, is_primary=is_primary, search=search
+            db,
+            owner_id=owner_id,
+            account_id=account_id,
+            tier=tier,
+            is_primary=is_primary,
+            search=search,
+            date_from=date_from,
+            date_to=date_to,
         )
         buffer = rows_to_xlsx(
             ["Name", "Email", "Phone", "Job Title", "Account", "Owner", "Tier", "Primary"],
@@ -147,6 +159,8 @@ async def list_contacts_route(
         tier=tier,
         is_primary=is_primary,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
         limit=limit,
         offset=offset,
     )

@@ -113,12 +113,17 @@ async def create_deal_route(
 @router.patch("/generic-patch", response_model=GenericPatchResponse)
 async def generic_patch_route(
     data: GenericPatchRequest,
-    _current_user: User = Depends(get_current_user),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> GenericPatchResponse:
     try:
         result = await generic_patch(
-            db, table=data.table, record_id=data.record_id, field=data.field, value=data.value
+            db,
+            table=data.table,
+            record_id=data.record_id,
+            field=data.field,
+            value=data.value,
+            actor_id=current_user.id,
         )
     except GenericPatchTableNotAllowedError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
@@ -136,9 +141,37 @@ async def list_deals_route(
     view: Literal["board", "list"] = Query("list"),
     owner_id: int | None = Query(None),
     account_id: int | None = Query(None),
-    stage_id: int | None = Query(None),
+    stage_id: list[int] | None = Query(
+        None,
+        description=(
+            "Repeatable — `?stage_id=3&stage_id=4` ORs across the given stages, same as `tier`. "
+            "Ids, not names: DealStage names are unique per company, so a name filter would match "
+            "other companies' stages too."
+        ),
+    ),
     tier: list[LeadTier] | None = Query(None),
     search: str | None = Query(None),
+    date_from: date | None = Query(None),
+    date_to: date | None = Query(None),
+    date_field: Literal["created_at", "closed_at"] = Query(
+        "created_at",
+        description=(
+            "Which timestamp date_from/date_to filter on. 'created_at' = when the deal was "
+            "opened. 'closed_at' = when it entered its current terminal stage (Closed Won / "
+            "Closed Lost / cold), the same lens the dashboard's Deals Closed tile and funnel "
+            "bars use — combine with stage_id to drill down into a tile. Both bounds inclusive."
+        ),
+    ),
+    stage_state: Literal["all", "open", "closed"] = Query(
+        "all",
+        description=(
+            "Filter by whether the deal is still in the pipeline. 'open' excludes Closed Won, "
+            "Closed Lost and cold stages — pass it with no date filter to get the dashboard's "
+            "Deals in Pipeline tile. 'closed' is the inverse. Server-side because DealStage only "
+            "exposes is_cold, so a client filtering by stage_id would have to hardcode the "
+            "Closed Won / Closed Lost names itself."
+        ),
+    ),
     sort_by: Literal["value", "expected_close_date", "created_at"] = Query("created_at"),
     sort_dir: Literal["asc", "desc"] = Query("desc"),
     limit: int = Query(20),
@@ -147,9 +180,26 @@ async def list_deals_route(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> DealsListResponse | StreamingResponse:
+    if date_from is not None and date_to is not None and date_to < date_from:
+        raise HTTPException(status_code=422, detail="date_to must not be before date_from")
+    # No deal is both open and closed, so this would silently return an empty list
+    # that reads like a bug. Reject it instead.
+    if date_field == "closed_at" and stage_state == "open":
+        raise HTTPException(
+            status_code=422, detail="date_field='closed_at' cannot be combined with stage_state='open'"
+        )
     if to_export:
         rows = await export_deals(
-            db, requester=current_user, owner_id=owner_id, stage_id=stage_id, tier=tier, search=search
+            db,
+            requester=current_user,
+            owner_id=owner_id,
+            stage_id=stage_id,
+            tier=tier,
+            search=search,
+            date_from=date_from,
+            date_to=date_to,
+            date_field=date_field,
+            stage_state=stage_state,
         )
         buffer = rows_to_xlsx(
             [
@@ -180,6 +230,7 @@ async def list_deals_route(
             stage_id=stage_id,
             tier=tier,
             search=search,
+            stage_state=stage_state,
             sort_by=sort_by,
             sort_dir=sort_dir,
         )
@@ -206,6 +257,10 @@ async def list_deals_route(
         stage_id=stage_id,
         tier=tier,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
+        stage_state=stage_state,
         sort_by=sort_by,
         sort_dir=sort_dir,
         limit=limit,

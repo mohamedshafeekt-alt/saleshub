@@ -444,6 +444,17 @@ async def test_list_accounts_as_delivery_sme_returns_403(client: AsyncClient, ma
     assert response.status_code == 403
 
 
+async def test_list_accounts_rejects_date_to_before_date_from(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-bad-date-range-accounts@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(
+        ACCOUNTS_URL, params={"date_from": "2026-09-11", "date_to": "2026-08-11"}, headers=headers
+    )
+
+    assert response.status_code == 422
+
+
 async def test_list_accounts_sales_rep_only_sees_own_accounts(
     client: AsyncClient, make_user, auth_headers, make_account
 ):

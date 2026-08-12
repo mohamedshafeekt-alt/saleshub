@@ -16,6 +16,8 @@ ordering (oldest first); list_deals_for_account gated through the ACCOUNT's
 ownership rather than individual deal ownership; export_deals rows.
 """
 
+from datetime import date
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -232,6 +234,44 @@ async def test_create_deal_succeeds_with_cold_stage_and_reason_provided(
     assert deal.cold_reason == "Never had budget"
 
 
+async def test_create_deal_raises_cold_reason_required_when_stage_is_closed_lost_without_reason(
+    db_session: AsyncSession, make_account, make_deal_stage
+):
+    owner = await _make_user(db_session, "owner-create-lost-required@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Create Lost Required Co")
+    lost_stage = await make_deal_stage(name="Closed Lost", is_cold=False)
+
+    data = DealCreate(
+        deal_name="Lost From Birth",
+        account_id=account.id,
+        owner_id=owner.id,
+        stage_id=lost_stage.id,
+    )
+
+    with pytest.raises(ColdReasonRequiredError):
+        await create_deal(db_session, data, requester=owner)
+
+
+async def test_create_deal_succeeds_with_closed_lost_stage_and_reason_provided(
+    db_session: AsyncSession, make_account, make_deal_stage
+):
+    owner = await _make_user(db_session, "owner-create-lost-ok@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Create Lost Ok Co")
+    lost_stage = await make_deal_stage(name="Closed Lost", is_cold=False)
+
+    data = DealCreate(
+        deal_name="Lost From Birth Ok",
+        account_id=account.id,
+        owner_id=owner.id,
+        stage_id=lost_stage.id,
+        cold_reason="Competitor chosen",
+    )
+    deal = await create_deal(db_session, data, requester=owner)
+
+    assert deal.stage_id == lost_stage.id
+    assert deal.cold_reason == "Competitor chosen"
+
+
 # --- list_deals ----------------------------------------------------------
 
 
@@ -305,7 +345,8 @@ async def test_list_deals_filters_by_stage_id(
         account_id=account.id, owner_id=rep.id, deal_name="Proposal Deal", stage_id=stage_b.id
     )
 
-    results, _total = await list_deals(db_session, requester=rep, stage_id=stage_a.id)
+    # stage_id takes a list now -- `?stage_id=3&stage_id=4` ORs across stages.
+    results, _total = await list_deals(db_session, requester=rep, stage_id=[stage_a.id])
 
     assert [deal.id for deal in results] == [eval_deal.id]
 
@@ -346,6 +387,24 @@ async def test_list_deals_sorts_by_value_ascending(db_session: AsyncSession, mak
     results, _total = await list_deals(db_session, requester=rep, sort_by="value", sort_dir="asc")
 
     assert [deal.id for deal in results] == [low.id, high.id]
+
+
+async def test_list_deals_filters_by_created_at_range(db_session: AsyncSession, make_account, make_deal):
+    rep = await _make_user(db_session, "rep-deal-created-at@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Created At Filter Co")
+    early = await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Early Deal")
+    early.created_at = date(2026, 6, 1)
+    middle = await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Middle Deal")
+    middle.created_at = date(2026, 7, 10)
+    late = await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Late Deal")
+    late.created_at = date(2026, 8, 1)
+    await db_session.flush()
+
+    results, _total = await list_deals(
+        db_session, requester=rep, date_from=date(2026, 7, 1), date_to=date(2026, 7, 31)
+    )
+
+    assert [deal.id for deal in results] == [middle.id]
 
 
 # --- list_deals_board ------------------------------------------------------
@@ -701,6 +760,39 @@ async def test_update_deal_succeeds_when_cold_reason_provided_in_same_request(
 
     assert updated.stage_id == cold_stage.id
     assert updated.cold_reason == "Budget cut"
+
+
+async def test_update_deal_raises_cold_reason_required_when_stage_set_to_closed_lost_without_reason(
+    db_session: AsyncSession, make_account, make_deal, make_deal_stage
+):
+    owner = await _make_user(db_session, "owner-lost-required-deal@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Lost Required Deal Co")
+    deal = await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Lost Candidate Deal")
+    lost_stage = await make_deal_stage(name="Closed Lost", is_cold=False)
+
+    with pytest.raises(ColdReasonRequiredError):
+        await update_deal(
+            db_session, deal_id=deal.id, data=DealUpdate(stage_id=lost_stage.id), requester=owner
+        )
+
+
+async def test_update_deal_succeeds_when_closed_lost_reason_provided_in_same_request(
+    db_session: AsyncSession, make_account, make_deal, make_deal_stage
+):
+    owner = await _make_user(db_session, "owner-lost-ok-deal@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Lost Ok Deal Co")
+    deal = await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Lost Ok Deal")
+    lost_stage = await make_deal_stage(name="Closed Lost", is_cold=False)
+
+    updated = await update_deal(
+        db_session,
+        deal_id=deal.id,
+        data=DealUpdate(stage_id=lost_stage.id, cold_reason="Competitor chosen"),
+        requester=owner,
+    )
+
+    assert updated.stage_id == lost_stage.id
+    assert updated.cold_reason == "Competitor chosen"
 
 
 async def test_update_deal_unrelated_field_does_not_retrigger_cold_reason_check(

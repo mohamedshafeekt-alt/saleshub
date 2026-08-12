@@ -2,8 +2,10 @@
 stage history, role-scoped listing/search/sort (flat or grouped-by-stage
 board), ownership-checked get/update/delete, stage-transition history
 logging, cold-reason enforcement (driven by the referenced DealStage's
-`is_cold` flag, not a hardcoded enum comparison), and xlsx export rows."""
+`is_cold` flag, plus a name check for Closed Lost specifically — see
+CLOSED_LOST_STAGE_NAME), and xlsx export rows."""
 
+from datetime import date, timedelta
 from typing import Any, Literal
 
 from sqlalchemy import ColumnElement, delete, func, or_, select
@@ -14,8 +16,8 @@ from app.models.account import Account
 from app.models.contact import Contact
 from app.models.deal import Deal
 from app.models.deal_contact import DealContact
-from app.models.deal_stage import DealStage
-from app.models.deal_stage_history import DealStageHistory
+from app.models.deal_stage import CLOSED_LOST_STAGE_NAME, CLOSED_WON_STAGE_NAME, DealStage, is_terminal_stage
+from app.models.deal_stage_history import DealStageHistory, entered_current_stage_in
 from app.models.enums import AuditAction, LeadTier, NotificationType
 from app.models.user import User
 from app.schemas.deal import DealCreate, DealUpdate
@@ -26,6 +28,15 @@ from app.services.notification_service import create_notification
 
 SortBy = Literal["value", "expected_close_date", "created_at"]
 SortDir = Literal["asc", "desc"]
+# Which timestamp date_from/date_to filter on. "closed_at" is the lens the
+# dashboard's Deals Closed tile and Closed Won/Lost/Cold funnel bars use, so a
+# tile can drill down to exactly the deals it counted.
+DateField = Literal["created_at", "closed_at"]
+# Whether the deal is still in the pipeline. Kept server-side deliberately:
+# DealStage exposes only `is_cold`, so Closed Won/Closed Lost are
+# indistinguishable from open stages in the API -- a client filtering by
+# stage_id would have to hardcode those two names itself.
+StageState = Literal["all", "open", "closed"]
 
 _SORT_COLUMNS: dict[str, ColumnElement[Any]] = {
     "value": Deal.value.expression,
@@ -43,7 +54,7 @@ class DealAccessForbiddenError(Exception):
 
 
 class ColdReasonRequiredError(Exception):
-    """Raised when a deal's stage is cold (DealStage.is_cold) without a cold_reason."""
+    """Raised when a deal's stage is cold (DealStage.is_cold) or Closed Lost, without a cold_reason."""
 
 
 class DealStageNotFoundError(Exception):
@@ -114,8 +125,8 @@ async def create_deal(db: AsyncSession, data: DealCreate, requester: User) -> De
 
     stage = await _get_stage_or_raise(db, data.stage_id)
 
-    if stage.is_cold and data.cold_reason is None:
-        raise ColdReasonRequiredError("cold_reason is required when the stage is cold")
+    if (stage.is_cold or stage.name == CLOSED_LOST_STAGE_NAME) and data.cold_reason is None:
+        raise ColdReasonRequiredError("cold_reason is required when the stage is cold or Closed Lost")
 
     await _assert_contacts_exist(db, data.contact_ids)
 
@@ -154,9 +165,13 @@ def _deal_filters(
     requester: User,
     owner_id: int | None,
     account_id: int | None,
-    stage_id: int | None,
+    stage_id: list[int] | None,
     tier: list[LeadTier] | None,
     search: str | None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    date_field: DateField = "created_at",
+    stage_state: StageState = "all",
 ) -> tuple[list[Any], int | None, bool]:
     if DEALS_VIEW_ALL not in requester.permission_codes:
         owner_id = requester.id
@@ -166,10 +181,48 @@ def _deal_filters(
         filters.append(Deal.owner_id == owner_id)
     if account_id is not None:
         filters.append(Deal.account_id == account_id)
-    if stage_id is not None:
-        filters.append(Deal.stage_id == stage_id)
+    if stage_id:
+        filters.append(Deal.stage_id.in_(stage_id))
     if tier:
         filters.append(Deal.tier.in_(tier))
+    # `stage_state="closed"` means "any terminal stage" (Closed Won, Closed
+    # Lost, or cold) -- a general closed-deals filter. `.has()` keeps this a
+    # correlated EXISTS so it works whether or not the caller already joined
+    # DealStage (list and board don't, export does).
+    #
+    # ponytail: this reads the deal's stage RIGHT NOW, so it reproduces the
+    # dashboard's Deals in Pipeline tile only when the period ends today
+    # (this_week/this_month). For a past custom range the tile reconstructs the
+    # stage as of the period end (dashboard_service.stage_as_of) and will count a
+    # deal that was open then but is closed now; this filter won't. Add an
+    # `open_as_of=<date>` param reusing stage_as_of if past-period drill-downs
+    # start mattering.
+    if stage_state == "open":
+        filters.append(~Deal.stage.has(is_terminal_stage()))
+    elif stage_state == "closed":
+        filters.append(Deal.stage.has(is_terminal_stage()))
+    elif date_field == "closed_at" and not stage_id:
+        # date_field=closed_at with no explicit stage_state or stage_id is the
+        # dashboard's "Deals Closed" tile drill-down
+        # (dashboard_service._count_deals_closed), which is Closed Won only --
+        # not "any terminal stage". Without this, a Closed Lost or cold deal
+        # that closed in the same window silently padded the drill-down past
+        # the tile's own count. A caller pinning stage_id explicitly (e.g. the
+        # funnel's Closed Lost/Cold bars) already says exactly which stage it
+        # wants, so this default is skipped rather than conflicting with it.
+        filters.append(Deal.stage.has(DealStage.name == CLOSED_WON_STAGE_NAME))
+
+    if date_field == "closed_at":
+        if date_from is not None or date_to is not None:
+            filters.append(entered_current_stage_in(date_from, date_to))
+    else:
+        if date_from is not None:
+            filters.append(Deal.created_at >= date_from)
+        if date_to is not None:
+            # date_to is inclusive, matching the dashboard's end_date. It used to
+            # be exclusive, which silently dropped deals created on the very day
+            # the caller asked for and split the two endpoints' counts.
+            filters.append(Deal.created_at < date_to + timedelta(days=1))
 
     needs_account_join = search is not None
     if search is not None:
@@ -190,9 +243,13 @@ async def list_deals(
     requester: User,
     owner_id: int | None = None,
     account_id: int | None = None,
-    stage_id: int | None = None,
+    stage_id: list[int] | None = None,
     tier: list[LeadTier] | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    date_field: DateField = "created_at",
+    stage_state: StageState = "all",
     sort_by: SortBy = "created_at",
     sort_dir: SortDir = "desc",
     limit: int = 20,
@@ -205,6 +262,10 @@ async def list_deals(
         stage_id=stage_id,
         tier=tier,
         search=search,
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
+        stage_state=stage_state,
     )
 
     count_query = select(func.count(Deal.id))
@@ -229,15 +290,19 @@ async def list_deals_board(
     requester: User,
     owner_id: int | None = None,
     account_id: int | None = None,
-    stage_id: int | None = None,
+    stage_id: list[int] | None = None,
     tier: list[LeadTier] | None = None,
     search: str | None = None,
+    stage_state: StageState = "all",
     sort_by: SortBy = "created_at",
     sort_dir: SortDir = "desc",
 ) -> list[tuple[DealStage, list[Deal]]]:
     """Same filtered result set as list_deals, grouped by stage (ordered by
     each stage's sort_order), no pagination -- it's a kanban board, not a
-    paged list. Only stages with at least one matching deal are returned."""
+    paged list. Only stages with at least one matching deal are returned.
+
+    Note the board applies no date filter at all, so it is always a live
+    "where does every deal sit right now" view."""
     filters, _owner_id, needs_account_join = _deal_filters(
         requester=requester,
         owner_id=owner_id,
@@ -245,6 +310,7 @@ async def list_deals_board(
         stage_id=stage_id,
         tier=tier,
         search=search,
+        stage_state=stage_state,
     )
 
     query = select(Deal)
@@ -330,8 +396,8 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
         )
 
     current_stage = await _get_stage_or_raise(db, deal.stage_id)
-    if current_stage.is_cold and deal.cold_reason is None:
-        raise ColdReasonRequiredError("cold_reason is required when the stage is cold")
+    if (current_stage.is_cold or current_stage.name == CLOSED_LOST_STAGE_NAME) and deal.cold_reason is None:
+        raise ColdReasonRequiredError("cold_reason is required when the stage is cold or Closed Lost")
 
     await db.flush()
     description = (
@@ -405,14 +471,27 @@ async def export_deals(
     *,
     requester: User,
     owner_id: int | None = None,
-    stage_id: int | None = None,
+    stage_id: list[int] | None = None,
     tier: list[LeadTier] | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    date_field: DateField = "created_at",
+    stage_state: StageState = "all",
 ) -> list[dict[str, Any]]:
     """All deals matching the requester's role-scoping, ignoring any
     account_id filter (export is always cross-account). No pagination."""
     filters, _owner_id, _needs_join = _deal_filters(
-        requester=requester, owner_id=owner_id, account_id=None, stage_id=stage_id, tier=tier, search=search
+        requester=requester,
+        owner_id=owner_id,
+        account_id=None,
+        stage_id=stage_id,
+        tier=tier,
+        search=search,
+        date_from=date_from,
+        date_to=date_to,
+        date_field=date_field,
+        stage_state=stage_state,
     )
 
     owner_name = func.trim(

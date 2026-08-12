@@ -38,10 +38,14 @@ class Account(Base):
     owner: Mapped["User"] = relationship("User", lazy="joined")
     # Contacts are reached via the ContactAccount link (a Contact can belong
     # to more than one Account) -- there is no direct Account.contacts anymore.
-    # passive_deletes: see the matching note on Contact.contact_accounts --
-    # the FK's ON DELETE CASCADE handles removal in the database.
+    # passive_deletes="all" (not True): get_account/delete_account eagerly
+    # selectinload this collection, so it's already populated by the time an
+    # Account is deleted. Plain passive_deletes=True still nulls out an
+    # already-loaded child's FK on parent delete (contact_accounts.account_id
+    # is NOT NULL -> IntegrityError); "all" defers fully to the FK's own ON
+    # DELETE CASCADE regardless of what's loaded.
     contact_accounts: Mapped[list["ContactAccount"]] = relationship(
-        "ContactAccount", order_by="ContactAccount.id", passive_deletes=True
+        "ContactAccount", order_by="ContactAccount.id", passive_deletes="all"
     )
     deals: Mapped[list["Deal"]] = relationship("Deal", order_by="Deal.id")
 

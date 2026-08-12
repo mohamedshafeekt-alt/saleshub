@@ -253,6 +253,198 @@ async def test_list_deals_as_delivery_sme_returns_403(client: AsyncClient, make_
     assert response.status_code == 403
 
 
+async def test_list_deals_rejects_date_to_before_date_from(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-bad-date-range-deals@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(
+        DEALS_URL, params={"date_from": "2026-09-11", "date_to": "2026-08-11"}, headers=headers
+    )
+
+    assert response.status_code == 422
+
+
+async def test_list_deals_date_to_includes_deals_created_on_the_end_date(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    """date_to is inclusive, matching the dashboard's end_date.
+
+    It used to be exclusive (`created_at < date_to`), so a deal created on the
+    very day the caller asked for was dropped — and the same range returned a
+    different count from the dashboard, which has always been inclusive.
+    """
+    from datetime import datetime
+
+    rep = await make_user(email="rep-date-to-inclusive@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="EndDateCo")
+    on_end_date = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Created On End Date", created_at=datetime(2026, 8, 11, 15, 30)
+    )
+    await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Created After", created_at=datetime(2026, 8, 12, 9, 0)
+    )
+    headers = auth_headers(rep)
+
+    response = await client.get(
+        DEALS_URL, params={"date_from": "2026-08-01", "date_to": "2026-08-11"}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert [item["id"] for item in response.json()["items"]] == [on_end_date.id]
+
+
+async def test_list_deals_closed_at_filters_by_stage_entry_not_creation(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change
+):
+    """date_field=closed_at dates a deal by when it entered its current terminal
+    stage — the lens the dashboard's Deals Closed tile counts with. Open deals
+    drop out entirely, whatever their created_at."""
+    from datetime import datetime
+
+    rep = await make_user(email="rep-closed-at@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="ClosedAtListCo")
+    open_stage = await make_deal_stage(name="Evaluation", sort_order=1)
+    won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
+
+    # Created outside the window, closed inside it — created_at would miss this.
+    closed_in_window = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Old Deal New Win",
+        stage_id=open_stage.id, created_at=datetime(2020, 1, 1),
+    )
+    await make_stage_change(closed_in_window, to_stage_id=won_stage.id, at=datetime(2026, 8, 5, 12, 0))
+    # Created inside the window, closed outside it — created_at would wrongly include this.
+    closed_later = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="New Deal Later Win",
+        stage_id=open_stage.id, created_at=datetime(2026, 8, 3, 9, 0),
+    )
+    await make_stage_change(closed_later, to_stage_id=won_stage.id, at=datetime(2026, 9, 5, 12, 0))
+    # Created inside the window, never closed — must not appear under a close filter.
+    still_open = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Still Open",
+        stage_id=open_stage.id, created_at=datetime(2026, 8, 4, 9, 0),
+    )
+    headers = auth_headers(rep)
+    window = {"date_from": "2026-08-01", "date_to": "2026-08-31"}
+
+    closed = await client.get(DEALS_URL, params={**window, "date_field": "closed_at"}, headers=headers)
+    created = await client.get(DEALS_URL, params=window, headers=headers)
+
+    assert closed.status_code == 200
+    assert [item["id"] for item in closed.json()["items"]] == [closed_in_window.id]
+    # Same range, other lens: the two genuinely answer different questions.
+    assert created.status_code == 200
+    assert {item["id"] for item in created.json()["items"]} == {closed_later.id, still_open.id}
+
+
+async def test_list_deals_stage_id_is_repeatable(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    """`?stage_id=3&stage_id=4` ORs across stages, same shape as `tier`. Ids not
+    names: DealStage names are unique per company, so a name filter would reach
+    into other companies' stages."""
+    rep = await make_user(email="rep-multi-stage@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="MultiStageCo")
+    evaluation = await make_deal_stage(name="Evaluation", sort_order=1)
+    proposals = await make_deal_stage(company_id=evaluation.company_id, name="Proposals", sort_order=2)
+    contracts = await make_deal_stage(company_id=evaluation.company_id, name="Contracts", sort_order=3)
+
+    in_evaluation = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=evaluation.id)
+    in_proposals = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=proposals.id)
+    await make_deal(account_id=account.id, owner_id=rep.id, stage_id=contracts.id)
+    headers = auth_headers(rep)
+
+    both = await client.get(DEALS_URL, params=[("stage_id", evaluation.id), ("stage_id", proposals.id)], headers=headers)
+    single = await client.get(DEALS_URL, params={"stage_id": evaluation.id}, headers=headers)
+
+    assert both.status_code == 200
+    assert {item["id"] for item in both.json()["items"]} == {in_evaluation.id, in_proposals.id}
+    # A single value still works unchanged — backwards compatible.
+    assert [item["id"] for item in single.json()["items"]] == [in_evaluation.id]
+
+
+async def test_list_deals_stage_state_open_excludes_won_lost_and_cold(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    """stage_state=open is the Deals in Pipeline lens: everything except Closed
+    Won, Closed Lost and cold stages, with no date filter applied."""
+    rep = await make_user(email="rep-stage-state@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="StageStateCo")
+    open_stage = await make_deal_stage(name="Evaluation", sort_order=1)
+    won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
+    lost_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Lost", sort_order=6)
+    cold_stage = await make_deal_stage(company_id=open_stage.company_id, name="Cold Deals", sort_order=7, is_cold=True)
+
+    still_open = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=open_stage.id)
+    won = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=won_stage.id)
+    lost = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=lost_stage.id, cold_reason="Lost it")
+    cold = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=cold_stage.id, cold_reason="Went quiet")
+    headers = auth_headers(rep)
+
+    open_only = await client.get(DEALS_URL, params={"stage_state": "open"}, headers=headers)
+    closed_only = await client.get(DEALS_URL, params={"stage_state": "closed"}, headers=headers)
+    everything = await client.get(DEALS_URL, headers=headers)
+
+    assert open_only.status_code == 200
+    assert [item["id"] for item in open_only.json()["items"]] == [still_open.id]
+    # Closed Lost and cold both count as out of the pipeline, not just Closed Won.
+    assert {item["id"] for item in closed_only.json()["items"]} == {won.id, lost.id, cold.id}
+    # Default is unfiltered — the two halves partition it.
+    assert everything.json()["total"] == 4
+
+
+async def test_list_deals_stage_state_open_matches_deals_in_pipeline_tile(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change
+):
+    """Clicking Deals in Pipeline has to land on exactly the deals it counted.
+
+    Mirrors the Deals Closed drill-down contract. Only asserted for the current
+    period: for a past custom range the tile reconstructs each deal's stage as of
+    the period end, which stage_state=open (a right-now filter) cannot reproduce.
+    """
+    from datetime import datetime
+
+    manager = await make_user(email="mgr-pipeline-drill@example.com", role=UserRole.SALES_MANAGER)
+    account = await make_account(owner_id=manager.id, company="PipelineDrillCo")
+    open_stage = await make_deal_stage(name="Evaluation", sort_order=1)
+    won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
+
+    # Two open, one of them opened long before the period — the tile is a snapshot,
+    # so an old-but-open deal still counts and the drill-down must include it.
+    await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id)
+    await make_deal(
+        account_id=account.id, owner_id=manager.id, stage_id=open_stage.id, created_at=datetime(2020, 1, 1)
+    )
+    # Closed this period — out of the pipeline on both sides.
+    closed = await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id)
+    await make_stage_change(closed, to_stage_id=won_stage.id, at=datetime.now())
+    headers = auth_headers(manager)
+
+    dashboard = await client.get("/api/v1/dashboard", headers=headers)
+    assert dashboard.status_code == 200
+    tile = dashboard.json()["summary"]["deals_in_pipeline"]["value"]
+
+    drill_down = await client.get(DEALS_URL, params={"stage_state": "open"}, headers=headers)
+
+    assert drill_down.status_code == 200
+    assert tile == 2
+    assert drill_down.json()["total"] == tile
+
+
+async def test_list_deals_rejects_closed_at_combined_with_stage_state_open(
+    client: AsyncClient, make_user, auth_headers
+):
+    """No deal is both open and closed — reject rather than return a confusing
+    empty list."""
+    rep = await make_user(email="rep-contradiction@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(
+        DEALS_URL, params={"date_field": "closed_at", "stage_state": "open"}, headers=headers
+    )
+
+    assert response.status_code == 422
+
+
 async def test_list_deals_sales_rep_only_sees_own_deals(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal
 ):
@@ -602,6 +794,43 @@ async def test_update_deal_returns_200_when_cold_reason_provided_with_stage(
     assert body["cold_reason"] == "Lost budget"
 
 
+async def test_update_deal_returns_400_when_stage_closed_lost_without_reason(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    owner = await make_user(email="rep-patch-lost-deal@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Patch Lost Deal Co")
+    deal = await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Patch Lost Deal")
+    lost_stage = await make_deal_stage(name="Closed Lost", is_cold=False)
+    headers = auth_headers(owner)
+
+    response = await client.patch(
+        f"{DEALS_URL}/{deal.id}", json={"stage_id": lost_stage.id}, headers=headers
+    )
+
+    assert response.status_code == 400
+
+
+async def test_update_deal_returns_200_when_closed_lost_reason_provided_with_stage(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    owner = await make_user(email="rep-patch-lost-ok-deal@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Patch Lost Ok Deal Co")
+    deal = await make_deal(account_id=account.id, owner_id=owner.id, deal_name="Patch Lost Ok Deal")
+    lost_stage = await make_deal_stage(name="Closed Lost", is_cold=False)
+    headers = auth_headers(owner)
+
+    response = await client.patch(
+        f"{DEALS_URL}/{deal.id}",
+        json={"stage_id": lost_stage.id, "cold_reason": "Competitor chosen"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["stage_id"] == lost_stage.id
+    assert body["cold_reason"] == "Competitor chosen"
+
+
 async def test_create_deal_returns_400_when_stage_cold_without_reason(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage
 ):
@@ -613,6 +842,23 @@ async def test_create_deal_returns_400_when_stage_cold_without_reason(
     response = await client.post(
         DEALS_URL,
         json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=cold_stage.id),
+        headers=headers,
+    )
+
+    assert response.status_code == 400
+
+
+async def test_create_deal_returns_400_when_stage_closed_lost_without_reason(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage
+):
+    rep = await make_user(email="rep-create-lost-deal@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Create Lost Deal Co")
+    lost_stage = await make_deal_stage(name="Closed Lost", is_cold=False)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        DEALS_URL,
+        json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=lost_stage.id),
         headers=headers,
     )
 
@@ -874,6 +1120,36 @@ async def test_generic_patch_updates_allowed_field(
 
     follow_up = await client.get(f"{DEALS_URL}/{deal.id}", headers=headers)
     assert follow_up.json()["deal_name"] == "Patched Name"
+
+
+async def test_generic_patch_writes_stage_history_when_it_moves_a_deals_stage(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    """A stage move through the generic patch door must leave a history row too.
+
+    The dashboard dates closes off deal_stage_history, so a stage patched
+    straight onto the row would drop out of Deals Closed and the leaderboard
+    while the same move via PATCH /deals/{id} shows up.
+    """
+    owner = await make_user(email="rep-generic-patch-stage@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Generic Patch Stage Co")
+    open_stage = await make_deal_stage(name="Evaluation", sort_order=1)
+    won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
+    deal = await make_deal(account_id=account.id, owner_id=owner.id, stage_id=open_stage.id)
+    headers = auth_headers(owner)
+
+    response = await client.patch(
+        f"{DEALS_URL}/generic-patch",
+        json={"table": "deals", "record_id": deal.id, "field": "stage_id", "value": won_stage.id},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    history = await client.get(f"{DEALS_URL}/{deal.id}/stage-history", headers=headers)
+    assert history.status_code == 200
+    assert [(row["from_stage_id"], row["to_stage_id"]) for row in history.json()] == [
+        (open_stage.id, won_stage.id)
+    ]
 
 
 async def test_generic_patch_returns_404_for_missing_record(

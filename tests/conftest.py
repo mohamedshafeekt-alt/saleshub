@@ -7,7 +7,7 @@ and never touch each other.
 
 import os
 from collections.abc import AsyncGenerator
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -412,6 +412,7 @@ async def make_deal(db_session: AsyncSession, make_deal_stage):
 
     from app.models.deal import Deal
     from app.models.deal_contact import DealContact
+    from app.models.deal_stage_history import DealStageHistory
 
     async def _make_deal(
         account_id: int,
@@ -420,6 +421,7 @@ async def make_deal(db_session: AsyncSession, make_deal_stage):
         currency: str = "USD",
         stage_id: int | None = None,
         contact_ids: list[int] | None = None,
+        with_history: bool = False,
         **kwargs,
     ):
         if stage_id is None:
@@ -436,6 +438,23 @@ async def make_deal(db_session: AsyncSession, make_deal_stage):
         db_session.add(deal)
         await db_session.flush()
 
+        if with_history:
+            # Mirror create_deal's initial from_stage=None row, dated to match the
+            # deal itself. Needed by anything that reconstructs a deal's stage at a
+            # past date (dashboard_service.stage_as_of): without it there is no
+            # record of where the deal started. Off by default so the tests that
+            # assert on stage-history row counts only see rows they wrote.
+            db_session.add(
+                DealStageHistory(
+                    deal_id=deal.id,
+                    from_stage_id=None,
+                    to_stage_id=stage_id,
+                    changed_by=owner_id,
+                    created_at=kwargs.get("created_at") or datetime.now(),
+                )
+            )
+            await db_session.flush()
+
         for contact_id in contact_ids or []:
             db_session.add(DealContact(deal_id=deal.id, contact_id=contact_id))
         await db_session.flush()
@@ -444,3 +463,40 @@ async def make_deal(db_session: AsyncSession, make_deal_stage):
         return deal
 
     return _make_deal
+
+
+@pytest_asyncio.fixture
+async def make_stage_change(db_session: AsyncSession):
+    """Factory fixture: await make_stage_change(deal, to_stage_id=..., at=...).
+
+    Moves the deal to a new stage AND records the DealStageHistory row, dated
+    `at` -- what update_deal does, minus the notification. Use this rather than
+    assigning Deal.updated_at: the dashboard reads close dates out of
+    deal_stage_history (see entered_current_stage_in), so a deal that make_deal
+    parked directly in a terminal stage has no transition on record and will not
+    count as closed in any period.
+    """
+
+    from app.models.deal_stage_history import DealStageHistory
+
+    async def _make_stage_change(
+        deal,
+        *,
+        to_stage_id: int,
+        at: datetime,
+        changed_by: int | None = None,
+    ):
+        row = DealStageHistory(
+            deal_id=deal.id,
+            from_stage_id=deal.stage_id,
+            to_stage_id=to_stage_id,
+            changed_by=changed_by if changed_by is not None else deal.owner_id,
+            created_at=at,
+        )
+        deal.stage_id = to_stage_id
+        db_session.add(row)
+        await db_session.flush()
+        await db_session.commit()
+        return row
+
+    return _make_stage_change

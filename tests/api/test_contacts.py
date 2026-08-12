@@ -224,6 +224,17 @@ async def test_delete_contact_returns_404_for_nonexistent_id(client: AsyncClient
 # --- GET /contacts (list) -----------------------------------------------------
 
 
+async def test_list_contacts_rejects_date_to_before_date_from(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-bad-date-range-contacts@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.get(
+        CONTACTS_URL, params={"date_from": "2026-09-11", "date_to": "2026-08-11"}, headers=headers
+    )
+
+    assert response.status_code == 422
+
+
 async def test_list_contacts_route_returns_200_paginated(
     client: AsyncClient, make_user, auth_headers, make_account, make_contact
 ):

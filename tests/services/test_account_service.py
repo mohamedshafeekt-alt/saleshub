@@ -16,13 +16,16 @@ conversion, reuses lead_service's not-found/forbidden checks, and honors
 explicit tier/owner_id overrides.
 """
 
+from datetime import date
+
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
-from app.models.enums import LeadTier
+from app.models.enums import LeadTier, NotificationType
+from app.models.lead_contact import LeadContact
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from tests.support.roles import UserRole, role_id_for
@@ -336,6 +339,23 @@ async def test_list_accounts_filters_by_tier(db_session: AsyncSession, make_acco
     assert [account.id for account in results] == [gold_account.id]
 
 
+async def test_list_accounts_filters_by_created_at_range(db_session: AsyncSession, make_account):
+    owner = await _make_user(db_session, "owner-date-range-acc@example.com", UserRole.SALES_REP)
+    early = await make_account(owner_id=owner.id, company="Early Co")
+    middle = await make_account(owner_id=owner.id, company="Middle Co")
+    late = await make_account(owner_id=owner.id, company="Late Co")
+    early.created_at = date(2026, 6, 1)
+    middle.created_at = date(2026, 7, 10)
+    late.created_at = date(2026, 8, 1)
+    await db_session.flush()
+
+    results, _total = await list_accounts(
+        db_session, requester=owner, date_from=date(2026, 7, 1), date_to=date(2026, 7, 31)
+    )
+
+    assert [account.id for account in results] == [middle.id]
+
+
 async def test_list_accounts_search_matches_company_name(db_session: AsyncSession, make_account):
     manager = await _make_user(db_session, "manager-search-acc1@example.com", UserRole.SALES_MANAGER)
     owner = await _make_user(db_session, "owner-search-acc1@example.com", UserRole.SALES_REP)
@@ -517,6 +537,35 @@ async def test_delete_account_removes_the_row(db_session: AsyncSession, make_acc
         await get_account(db_session, account_id=account_id, requester=owner)
 
 
+async def test_delete_account_with_a_linked_contact_removes_the_contact_account_row(
+    db_session: AsyncSession,
+):
+    # Regression test: delete_account loads the account through
+    # _get_account_or_raise, which eagerly selectinloads contact_accounts.
+    # With that collection already populated, deleting the account must not
+    # try to null contact_accounts.account_id (NOT NULL) instead of letting
+    # the FK's ON DELETE CASCADE remove the row.
+    owner = await _make_user(db_session, "owner-del-with-contact@example.com", UserRole.SALES_REP)
+    data = AccountCreate(
+        company="Delete With Contact Co",
+        domain="delete-with-contact.example.com",
+        tier=LeadTier.GOLD,
+        owner_id=owner.id,
+        contacts=[AccountContactInput(first_name="Jane", last_name="Doe", email="jane-del@example.com")],
+    )
+    account = await create_account(db_session, data, owner)
+    account_id = account.id
+
+    await delete_account(db_session, account_id=account_id, requester=owner)
+
+    with pytest.raises(AccountNotFoundError):
+        await get_account(db_session, account_id=account_id, requester=owner)
+    remaining_links = (
+        await db_session.execute(select(ContactAccount).where(ContactAccount.account_id == account_id))
+    ).scalars().all()
+    assert remaining_links == []
+
+
 # --- get_account_overview -----------------------------------------------------
 
 
@@ -639,6 +688,50 @@ async def test_convert_lead_to_account_creates_primary_contact_from_lead(
     assert contact.linkedin_url == "https://linkedin.com/in/selva"
 
 
+async def test_convert_lead_to_account_carries_over_additional_lead_contacts(
+    db_session: AsyncSession, make_lead
+):
+    # Regression test: a Lead's "+ Add another email" contacts (LeadContact
+    # rows beyond the one mirroring the lead's own email) were silently
+    # dropped on conversion -- only the primary contact made it onto the
+    # new Account.
+    owner = await _make_user(db_session, "owner-convert-multi@example.com", UserRole.SALES_REP)
+    lead = await make_lead(
+        owner_id=owner.id,
+        email="convert-multi@example.com",
+        first_name="Selva",
+        last_name="Kumar",
+        phone="9876543210",
+    )
+    db_session.add_all(
+        [
+            LeadContact(lead_id=lead.id, email=lead.email, phone=lead.phone),
+            LeadContact(lead_id=lead.id, email="extra-one@example.com", phone="111"),
+            LeadContact(lead_id=lead.id, email="extra-two@example.com", phone="222"),
+        ]
+    )
+    await db_session.flush()
+
+    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
+
+    contacts = await _contacts_for_account(db_session, account.id)
+    assert {c.email for c in contacts} == {
+        "convert-multi@example.com",
+        "extra-one@example.com",
+        "extra-two@example.com",
+    }
+    # LeadContact has no name field -- additional contacts inherit the lead's.
+    extra = next(c for c in contacts if c.email == "extra-one@example.com")
+    assert extra.first_name == "Selva"
+    assert extra.last_name == "Kumar"
+    assert extra.phone == "111"
+
+    links = (
+        await db_session.execute(select(ContactAccount).where(ContactAccount.account_id == account.id))
+    ).scalars().all()
+    assert sum(link.is_primary for link in links) == 1
+
+
 async def test_convert_lead_to_account_reuses_existing_contact_with_same_email(
     db_session: AsyncSession, make_lead
 ):
@@ -695,6 +788,23 @@ async def test_convert_lead_to_account_writes_audit_log_for_both_lead_and_accoun
         )
     ).scalar_one()
     assert "converted" in lead_entry.description.lower()
+
+
+async def test_convert_lead_to_account_notifies_the_new_owner(db_session: AsyncSession, make_lead):
+    from app.models.notification import Notification
+
+    owner = await _make_user(db_session, "owner-convert-notify@example.com", UserRole.SALES_REP)
+    lead = await make_lead(
+        owner_id=owner.id, email="convert-notify@example.com", company="Notify Co"
+    )
+
+    account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
+
+    result = await db_session.execute(select(Notification).where(Notification.recipient_id == owner.id))
+    notification = result.scalar_one()
+    assert notification.type == NotificationType.LEAD_CONVERTED
+    assert notification.entity_type == "account"
+    assert notification.entity_id == account.id
 
 
 async def test_convert_lead_to_account_raises_for_already_converted_lead(

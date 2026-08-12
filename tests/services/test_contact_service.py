@@ -18,6 +18,8 @@ contact's linked accounts satisfies them; search matches name/email;
 pagination; contacts with zero linked accounts still appear when unfiltered.
 """
 
+from datetime import date
+
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -387,6 +389,28 @@ async def test_list_contacts_no_filters_returns_all_contacts_including_unlinked(
     ids = {contact.id for contact, _link in items}
     assert linked.id in ids
     assert unlinked.id in ids
+
+
+async def test_list_contacts_filters_by_created_at_range(db_session: AsyncSession):
+    actor = await _make_user(db_session, "actor-list-date-range@example.com", UserRole.SALES_REP)
+    early = await create_contact(
+        db_session, ContactCreate(first_name="Early", email="early-date-range@example.com"), requester=actor
+    )
+    early.created_at = date(2026, 6, 1)
+    in_range = await create_contact(
+        db_session, ContactCreate(first_name="InRange", email="in-range-date-range@example.com"), requester=actor
+    )
+    in_range.created_at = date(2026, 7, 10)
+    late = await create_contact(
+        db_session, ContactCreate(first_name="Late", email="late-date-range@example.com"), requester=actor
+    )
+    late.created_at = date(2026, 8, 1)
+    await db_session.flush()
+
+    items, total = await list_contacts(db_session, date_from=date(2026, 7, 1), date_to=date(2026, 7, 31))
+
+    assert total == 1
+    assert [contact.id for contact, _link in items] == [in_range.id]
 
 
 async def test_list_contacts_owner_filter_matches_any_of_multiple_linked_accounts(

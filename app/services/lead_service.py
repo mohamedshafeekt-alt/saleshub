@@ -1,6 +1,7 @@
 """Lead business logic: creation (with duplicate-email guard), role-scoped
 listing/search, and ownership-checked get/update/delete."""
 
+from datetime import date
 from typing import Any
 
 from fastapi import BackgroundTasks
@@ -138,6 +139,8 @@ async def list_leads(
     source: LeadSource | None = None,
     status: LeadStatus | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
     limit: int = 20,
     offset: int = 0,
 ) -> tuple[list[Lead], int]:
@@ -160,6 +163,10 @@ async def list_leads(
                 Lead.email.ilike(pattern),
             )
         )
+    if date_from is not None:
+        filters.append(Lead.created_at >= date_from)
+    if date_to is not None:
+        filters.append(Lead.created_at < date_to)
 
     count_query = select(func.count(Lead.id)).where(*filters)
     items_query = (
@@ -184,6 +191,8 @@ async def export_leads(
     source: LeadSource | None = None,
     status: LeadStatus | None = None,
     search: str | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
 ) -> list[dict[str, Any]]:
     """All leads matching the requester's role-scoping (same rule as
     list_leads). No pagination."""
@@ -206,6 +215,10 @@ async def export_leads(
                 Lead.email.ilike(pattern),
             )
         )
+    if date_from is not None:
+        filters.append(Lead.created_at >= date_from)
+    if date_to is not None:
+        filters.append(Lead.created_at < date_to)
 
     result = await db.execute(
         select(Lead)
