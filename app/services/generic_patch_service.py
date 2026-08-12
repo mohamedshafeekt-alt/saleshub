@@ -36,7 +36,7 @@ class GenericPatchRecordNotFoundError(Exception):
 
 
 async def generic_patch(
-    db: AsyncSession, *, table: str, record_id: int, field: str, value: Any
+    db: AsyncSession, *, table: str, record_id: int, field: str, value: Any, actor_id: int
 ) -> dict[str, Any]:
     model = ALLOWED_TABLES.get(table)
     if model is None:
@@ -48,6 +48,21 @@ async def generic_patch(
     record = await db.get(model, record_id)
     if record is None:
         raise GenericPatchRecordNotFoundError(f"{table} record not found: {record_id}")
+
+    # A stage move must leave a history row whichever door it came through.
+    # deal_stage_history is what dates a close (see
+    # deal_stage_history.entered_current_stage_in) -- a stage patched straight
+    # onto the row here would otherwise disappear from Deals Closed, the
+    # leaderboard and the Closed Won funnel bar, while update_deal's moves show up.
+    if isinstance(record, Deal) and field == "stage_id" and value != record.stage_id:
+        db.add(
+            DealStageHistory(
+                deal_id=record.id,
+                from_stage_id=record.stage_id,
+                to_stage_id=value,
+                changed_by=actor_id,
+            )
+        )
 
     setattr(record, field, value)
     await db.flush()
