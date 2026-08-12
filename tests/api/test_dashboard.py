@@ -220,9 +220,9 @@ async def test_dashboard_funnel_live_counts_open_stages_and_period_scopes_termin
         if s["stage_name"] in {"Received Requirements", "Qualified to Buy", "Closed Won"}
     ]
     assert stages == [
-        {"stage_id": stage_a.id, "stage_name": "Received Requirements", "is_terminal": False, "count": 2},
-        {"stage_id": stage_b.id, "stage_name": "Qualified to Buy", "is_terminal": False, "count": 1},
-        {"stage_id": won_stage.id, "stage_name": "Closed Won", "is_terminal": True, "count": 1},
+        {"stage_name": "Received Requirements", "count": 2},
+        {"stage_name": "Qualified to Buy", "count": 1},
+        {"stage_name": "Closed Won", "count": 1},
     ]
 
 

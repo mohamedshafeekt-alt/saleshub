@@ -20,15 +20,8 @@ class DashboardSummary(BaseModel):
 
 
 class FunnelStage(BaseModel):
-    stage_id: int
     stage_name: str
     count: int
-    # Lets a client drill down into `GET /deals` correctly without guessing
-    # from `stage_name` (dashboard_service.get_funnel): open stages are a live
-    # snapshot (no date filter), terminal ones are period-scoped
-    # (`date_field=closed_at` over the same range this funnel was requested
-    # with).
-    is_terminal: bool
 
 
 class FunnelResponse(BaseModel):
