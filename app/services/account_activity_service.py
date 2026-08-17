@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.permission_codes import ACCOUNTS_DELETE_ANY_ACTIVITY
+from app.core.permission_codes import ACCOUNTS_DELETE_ANY_ACTIVITY, ACCOUNTS_VIEW_ALL
 from app.models.account import Account
 from app.models.account_activity import AccountActivity
 from app.models.enums import AccountActivityType
@@ -78,7 +78,7 @@ async def update_account_activity(
     db: AsyncSession, account_id: int, activity_id: int, data: AccountActivityUpdate, requester: User
 ) -> AccountActivity:
     account, activity = await _get_account_and_activity_or_raise(db, account_id, activity_id, requester)
-    if account.owner_id != requester.id:
+    if ACCOUNTS_VIEW_ALL not in requester.permission_codes and account.owner_id != requester.id:
         raise AccountAccessForbiddenError(
             f"Only the account owner can edit its activities: account {account_id}"
         )

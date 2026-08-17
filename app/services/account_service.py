@@ -365,10 +365,11 @@ async def convert_lead_to_account(
     # Lead.contacts (added via "+ Add another email" on the lead) carry over
     # too -- same reuse-by-email as the primary contact above, just
     # non-primary. Skip the row that mirrors the lead's own email (already
-    # handled as the primary) and any lacking an email at all. LeadContact
-    # has no name field, so these inherit the lead's name, same convention
-    # as _add_contacts' nameless-extra-contact handling on direct Account
-    # creation.
+    # handled as the primary) and any lacking an email at all. Each
+    # LeadContact carries its own name now; only fall back to the lead's own
+    # name when a contact didn't supply one (same convention as
+    # _add_contacts' nameless-extra-contact handling on direct Account
+    # creation).
     lead_contacts = (
         await db.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
     ).scalars().all()
@@ -380,8 +381,8 @@ async def convert_lead_to_account(
         ).scalar_one_or_none()
         if extra_contact is None:
             extra_contact = Contact(
-                first_name=lead.first_name,
-                last_name=lead.last_name,
+                first_name=lead_contact.first_name or lead.first_name,
+                last_name=lead_contact.last_name if lead_contact.first_name else lead.last_name,
                 email=lead_contact.email,
                 phone=lead_contact.phone,
             )

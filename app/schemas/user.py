@@ -38,9 +38,13 @@ class UserRead(ORMBase):
 
 
 class UserUpdate(BaseModel):
-    first_name: str
+    first_name: str = Field(min_length=1)
     last_name: str | None = None
     phone_number: str | None = None
+
+
+class UserRoleUpdate(BaseModel):
+    role_id: int
 
 
 class PasswordChange(BaseModel):

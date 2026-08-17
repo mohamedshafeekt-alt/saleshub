@@ -725,7 +725,13 @@ async def test_convert_lead_to_account_carries_over_additional_lead_contacts(
     db_session.add_all(
         [
             LeadContact(lead_id=lead.id, email=lead.email, phone=lead.phone),
-            LeadContact(lead_id=lead.id, email="extra-one@example.com", phone="111"),
+            LeadContact(
+                lead_id=lead.id,
+                first_name="Ravi",
+                last_name="Shankar",
+                email="extra-one@example.com",
+                phone="111",
+            ),
             LeadContact(lead_id=lead.id, email="extra-two@example.com", phone="222"),
         ]
     )
@@ -739,11 +745,17 @@ async def test_convert_lead_to_account_carries_over_additional_lead_contacts(
         "extra-one@example.com",
         "extra-two@example.com",
     }
-    # LeadContact has no name field -- additional contacts inherit the lead's.
-    extra = next(c for c in contacts if c.email == "extra-one@example.com")
-    assert extra.first_name == "Selva"
-    assert extra.last_name == "Kumar"
-    assert extra.phone == "111"
+    # Regression test: two-or-more-contact leads previously all landed with
+    # the lead's own name -- a LeadContact with its own name now keeps it.
+    extra_one = next(c for c in contacts if c.email == "extra-one@example.com")
+    assert extra_one.first_name == "Ravi"
+    assert extra_one.last_name == "Shankar"
+    assert extra_one.phone == "111"
+
+    # A LeadContact that never supplied a name still falls back to the lead's.
+    extra_two = next(c for c in contacts if c.email == "extra-two@example.com")
+    assert extra_two.first_name == "Selva"
+    assert extra_two.last_name == "Kumar"
 
     links = (
         await db_session.execute(select(ContactAccount).where(ContactAccount.account_id == account.id))

@@ -1221,7 +1221,7 @@ async def test_update_lead_activity_returns_403_for_non_owner(
     client: AsyncClient, make_user, auth_headers, make_lead
 ):
     owner = await make_user(email="rep-owns-update-activity@example.com", role=UserRole.SALES_REP)
-    admin = await make_user(email="admin-update-activity@example.com", role=UserRole.ADMIN)
+    other_rep = await make_user(email="other-rep-update-activity@example.com", role=UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="update-activity-forbidden-lead@example.com")
     created = (
         await client.post(
@@ -1234,10 +1234,36 @@ async def test_update_lead_activity_returns_403_for_non_owner(
     response = await client.patch(
         f"{LEADS_URL}/{lead.id}/activities/{created['id']}",
         json={"note": "revised"},
-        headers=auth_headers(admin),
+        headers=auth_headers(other_rep),
     )
 
     assert response.status_code == 403
+
+
+async def test_update_lead_activity_returns_200_for_view_all_holder(
+    client: AsyncClient, make_user, auth_headers, make_lead
+):
+    """An Admin (LEADS_VIEW_ALL) can edit activities on a lead they don't own,
+    same as they can already view any lead."""
+    owner = await make_user(email="rep-owns-update-activity-viewall@example.com", role=UserRole.SALES_REP)
+    admin = await make_user(email="admin-update-activity-viewall@example.com", role=UserRole.ADMIN)
+    lead = await make_lead(owner_id=owner.id, email="update-activity-viewall-lead@example.com")
+    created = (
+        await client.post(
+            f"{LEADS_URL}/{lead.id}/activities",
+            json={"type": "note", "note": "can edit"},
+            headers=auth_headers(owner),
+        )
+    ).json()
+
+    response = await client.patch(
+        f"{LEADS_URL}/{lead.id}/activities/{created['id']}",
+        json={"note": "revised"},
+        headers=auth_headers(admin),
+    )
+
+    assert response.status_code == 200
+    assert response.json()["note"] == "revised"
 
 
 async def test_list_leads_to_export_returns_valid_xlsx_with_expected_rows(

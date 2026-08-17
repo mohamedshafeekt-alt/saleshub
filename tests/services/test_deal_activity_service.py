@@ -149,18 +149,36 @@ async def test_update_deal_activity_raises_forbidden_for_non_owner(
     db_session: AsyncSession, make_account, make_deal
 ):
     owner = await _make_user(db_session, "owner-update-deal-activity-forbidden@example.com", UserRole.SALES_REP)
-    manager = await _make_user(db_session, "manager-update-deal-activity@example.com", UserRole.SALES_MANAGER)
-    admin = await _make_user(db_session, "admin-update-deal-activity@example.com", UserRole.ADMIN)
+    other_rep = await _make_user(db_session, "other-rep-update-deal-activity@example.com", UserRole.SALES_REP)
     deal = await _make_deal(make_account, make_deal, owner)
     activity = DealActivity(deal_id=deal.id, type=DealActivityType.NOTE, note="original", created_by=owner.id)
     db_session.add(activity)
     await db_session.flush()
 
-    for non_owner in (manager, admin):
-        with pytest.raises(DealAccessForbiddenError):
-            await update_deal_activity(
-                db_session, deal.id, activity.id, DealActivityUpdate(note="revised"), requester=non_owner
-            )
+    with pytest.raises(DealAccessForbiddenError):
+        await update_deal_activity(
+            db_session, deal.id, activity.id, DealActivityUpdate(note="revised"), requester=other_rep
+        )
+
+
+async def test_update_deal_activity_allows_view_all_holder(db_session: AsyncSession, make_account, make_deal):
+    """A Sales Manager / Admin can edit activities on deals they don't own,
+    same as they can already view any deal via DEALS_VIEW_ALL."""
+    owner = await _make_user(db_session, "owner-update-deal-activity-viewall@example.com", UserRole.SALES_REP)
+    manager = await _make_user(db_session, "manager-update-deal-activity-viewall@example.com", UserRole.SALES_MANAGER)
+    admin = await _make_user(db_session, "admin-update-deal-activity-viewall@example.com", UserRole.ADMIN)
+    deal = await _make_deal(make_account, make_deal, owner)
+
+    for viewer in (manager, admin):
+        activity = DealActivity(deal_id=deal.id, type=DealActivityType.NOTE, note="original", created_by=owner.id)
+        db_session.add(activity)
+        await db_session.flush()
+
+        updated = await update_deal_activity(
+            db_session, deal.id, activity.id, DealActivityUpdate(note="revised"), requester=viewer
+        )
+        assert updated.note == "revised"
+        assert updated.updated_by == viewer.id
 
 
 async def test_update_deal_activity_raises_not_found_for_missing_activity(

@@ -11,23 +11,26 @@ from app.core.permission_codes import USERS_MANAGE, USERS_VIEW
 from app.core.rbac import requires_permission
 from app.db.session import get_db
 from app.models.user import User, UserStatus
-from app.schemas.user import PasswordChange, UserCreate, UserRead, UserUpdate
+from app.schemas.user import PasswordChange, UserCreate, UserRead, UserRoleUpdate, UserUpdate
 from app.services import auth_service
 from app.services.email.sender import EmailSender
 from app.services.user_service import (
     EmailAlreadyExistsError,
     IncorrectPasswordError,
     RoleNotFoundError,
+    SamePasswordError,
     UnsupportedImageTypeError,
     UserNotFoundError,
     activate_user,
     change_password,
     create_user,
     list_users,
+    reinvite_user,
     remove_avatar,
     save_avatar,
     soft_delete_user,
     update_profile,
+    update_user_role,
 )
 
 router = APIRouter(prefix="/users", tags=["users"])
@@ -80,6 +83,8 @@ async def change_my_password(
     try:
         await change_password(db, current_user, data.current_password, data.new_password)
     except IncorrectPasswordError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except SamePasswordError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
     # Force every other session (and the current access token, per
@@ -139,11 +144,12 @@ async def list_users_route(
 @requires_permission(USERS_MANAGE)
 async def delete_user_route(
     user_id: int,
+    permanent: bool = Query(False),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
     try:
-        await soft_delete_user(db, user_id, actor_id=current_user.id)
+        await soft_delete_user(db, user_id, actor_id=current_user.id, permanent=permanent)
     except UserNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
@@ -164,4 +170,45 @@ async def activate_user_route(
 
     await db.commit()
     user = await db.get(User, user_id)
+    return UserRead.model_validate(user)
+
+
+@router.post("/{user_id}/reinvite", response_model=UserRead)
+@requires_permission(USERS_MANAGE)
+async def reinvite_user_route(
+    user_id: int,
+    background_tasks: BackgroundTasks,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+    email_sender: EmailSender = Depends(get_email_sender),
+) -> UserRead:
+    try:
+        user = await reinvite_user(
+            db, user_id, email_sender, actor_id=current_user.id, background_tasks=background_tasks
+        )
+    except UserNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
+    return UserRead.model_validate(user)
+
+
+@router.patch("/{user_id}/role", response_model=UserRead)
+@requires_permission(USERS_MANAGE)
+async def update_user_role_route(
+    user_id: int,
+    data: UserRoleUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> UserRead:
+    if user_id == current_user.id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Cannot change your own role")
+    try:
+        user = await update_user_role(db, user_id, data.role_id, actor_id=current_user.id)
+    except UserNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except RoleNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+    await db.commit()
     return UserRead.model_validate(user)

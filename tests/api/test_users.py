@@ -385,6 +385,122 @@ async def test_delete_user_no_auth_header_returns_401(client: AsyncClient, make_
     assert response.status_code == 401
 
 
+async def test_delete_user_permanent_removes_from_list(client: AsyncClient, make_user, auth_headers):
+    admin = await make_user(email="admin-hard-deleter@example.com", role=UserRole.ADMIN)
+    target = await make_user(email="hard-delete-target@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(admin)
+
+    response = await client.delete(f"{USERS_URL}/{target.id}", params={"permanent": "true"}, headers=headers)
+    assert response.status_code == 204
+
+    list_response = await client.get(USERS_URL, headers=headers)
+    emails = [u["email"] for u in list_response.json()]
+    assert target.email not in emails
+
+
+async def test_delete_user_permanent_as_sales_rep_returns_403(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-cant-hard-delete@example.com", role=UserRole.SALES_REP)
+    target = await make_user(email="hard-delete-target-403@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.delete(f"{USERS_URL}/{target.id}", params={"permanent": "true"}, headers=headers)
+
+    assert response.status_code == 403
+
+
+async def test_reinvite_user_regenerates_password_and_reactivates(
+    client: AsyncClient, make_user, auth_headers, fake_email_sender
+):
+    admin = await make_user(email="admin-reinviter@example.com", role=UserRole.ADMIN)
+    target = await make_user(
+        email="reinvite-target@example.com", role=UserRole.SALES_REP, is_active=False
+    )
+    headers = auth_headers(admin)
+
+    response = await client.post(f"{USERS_URL}/{target.id}/reinvite", headers=headers)
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "invited"
+    emails = [c["to"] for c in fake_email_sender.calls]
+    assert target.email in emails
+
+
+async def test_reinvite_user_as_sales_rep_returns_403(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-cant-reinvite@example.com", role=UserRole.SALES_REP)
+    target = await make_user(email="reinvite-target-403@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(f"{USERS_URL}/{target.id}/reinvite", headers=headers)
+
+    assert response.status_code == 403
+
+
+async def test_reinvite_user_unknown_id_returns_404(client: AsyncClient, make_user, auth_headers):
+    admin = await make_user(email="admin-reinvite-404@example.com", role=UserRole.ADMIN)
+    headers = auth_headers(admin)
+
+    response = await client.post(f"{USERS_URL}/999999/reinvite", headers=headers)
+
+    assert response.status_code == 404
+
+
+async def test_update_user_role_changes_role(client: AsyncClient, make_user, auth_headers, db_session):
+    from tests.support.roles import role_id_for
+
+    admin = await make_user(email="admin-role-updater@example.com", role=UserRole.ADMIN)
+    target = await make_user(email="role-update-target@example.com", role=UserRole.SALES_REP)
+    manager_role_id = await role_id_for(db_session, UserRole.SALES_MANAGER)
+    headers = auth_headers(admin)
+
+    response = await client.patch(
+        f"{USERS_URL}/{target.id}/role", json={"role_id": manager_role_id}, headers=headers
+    )
+
+    assert response.status_code == 200
+    assert response.json()["role"]["id"] == manager_role_id
+
+
+async def test_update_user_role_as_sales_rep_returns_403(client: AsyncClient, make_user, auth_headers, db_session):
+    from tests.support.roles import role_id_for
+
+    rep = await make_user(email="rep-cant-change-role@example.com", role=UserRole.SALES_REP)
+    target = await make_user(email="role-update-target-403@example.com", role=UserRole.SALES_REP)
+    manager_role_id = await role_id_for(db_session, UserRole.SALES_MANAGER)
+    headers = auth_headers(rep)
+
+    response = await client.patch(
+        f"{USERS_URL}/{target.id}/role", json={"role_id": manager_role_id}, headers=headers
+    )
+
+    assert response.status_code == 403
+
+
+async def test_update_user_role_rejects_self_change(client: AsyncClient, make_user, auth_headers, db_session):
+    from tests.support.roles import role_id_for
+
+    admin = await make_user(email="admin-self-role@example.com", role=UserRole.ADMIN)
+    manager_role_id = await role_id_for(db_session, UserRole.SALES_MANAGER)
+    headers = auth_headers(admin)
+
+    response = await client.patch(
+        f"{USERS_URL}/{admin.id}/role", json={"role_id": manager_role_id}, headers=headers
+    )
+
+    assert response.status_code == 400
+
+
+async def test_update_user_role_unknown_role_returns_404(client: AsyncClient, make_user, auth_headers):
+    admin = await make_user(email="admin-role-404@example.com", role=UserRole.ADMIN)
+    target = await make_user(email="role-update-unknown-role@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(admin)
+
+    response = await client.patch(
+        f"{USERS_URL}/{target.id}/role", json={"role_id": 999_999}, headers=headers
+    )
+
+    assert response.status_code == 404
+
+
 ME_URL = f"{USERS_URL}/me"
 ME_PASSWORD_URL = f"{USERS_URL}/me/password"
 

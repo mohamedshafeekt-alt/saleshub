@@ -250,7 +250,11 @@ async def test_dashboard_deal_distribution_groups_by_tier_within_period(
     await make_deal(
         account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.SILVER, value=200, with_history=True
     )
-    # Entered its (only) stage in 2020 -- outside the current-month window.
+    # Entered its (only) stage in 2020 -- outside the current-month window, but
+    # "Evaluation" is a non-terminal (open) stage, so it still counts here --
+    # same rule as the Pipeline Funnel: an open stage counts every deal
+    # currently sitting there regardless of period, only Closed Won/Lost/Cold
+    # are period-scoped.
     await make_deal(
         account_id=account.id,
         owner_id=user.id,
@@ -266,8 +270,61 @@ async def test_dashboard_deal_distribution_groups_by_tier_within_period(
     assert response.status_code == 200
     entries = {e["tier"]: e for e in response.json()["deal_distribution"]["entries"]}
     assert entries["gold"] == {"tier": "gold", "count": 2, "total_value": 1500.0}
-    # Silver excludes the deal that entered its stage outside the current-month window.
-    assert entries["silver"] == {"tier": "silver", "count": 1, "total_value": 200.0}
+    assert entries["silver"] == {"tier": "silver", "count": 2, "total_value": 1199.0}
+
+
+async def test_dashboard_deal_distribution_excludes_terminal_stage_deal_outside_period(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    # Regression test: unlike an open stage, a terminal stage (Closed Won/Lost/
+    # Cold) IS period-scoped -- a deal that entered it outside the selected
+    # range must not count, same as the Pipeline Funnel and the Deals list's
+    # own `date_field=closed_at` filter.
+    from datetime import datetime
+
+    from app.models.enums import LeadTier
+
+    user = await make_user(email="dist-terminal@example.com", role=UserRole.SALES_MANAGER)
+    headers = auth_headers(user)
+    account = await make_account(owner_id=user.id, company="TerminalCo")
+    won_stage = await make_deal_stage(name="Closed Won", sort_order=5)
+    await make_deal(
+        account_id=account.id,
+        owner_id=user.id,
+        stage_id=won_stage.id,
+        tier=LeadTier.GOLD,
+        value=777,
+        with_history=True,
+        created_at=datetime(2020, 1, 1),
+    )
+
+    response = await client.get("/api/v1/dashboard", headers=headers)
+
+    assert response.status_code == 200
+    entries = {e["tier"]: e for e in response.json()["deal_distribution"]["entries"]}
+    assert "gold" not in entries
+
+
+async def test_dashboard_deal_distribution_includes_untiered_deals_as_unassigned(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    # Regression test: untiered deals used to be dropped from the response
+    # entirely (`Deal.tier.is_not(None)` filter), so the widget's "Total
+    # Deals" figure (the sum of entry counts) undercounted vs. the Deals
+    # list's own total for the same range.
+    user = await make_user(email="dist-untiered@example.com", role=UserRole.SALES_MANAGER)
+    headers = auth_headers(user)
+    account = await make_account(owner_id=user.id, company="UntieredCo")
+    stage = await make_deal_stage(name="Evaluation Untiered", sort_order=0)
+    await make_deal(
+        account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=None, value=300, with_history=True
+    )
+
+    response = await client.get("/api/v1/dashboard", headers=headers)
+
+    assert response.status_code == 200
+    entries = {e["tier"]: e for e in response.json()["deal_distribution"]["entries"]}
+    assert entries["Unassigned"] == {"tier": "Unassigned", "count": 1, "total_value": 300.0}
 
 
 async def test_dashboard_leaderboard_ranks_owners_by_won_revenue_within_period(
@@ -555,46 +612,53 @@ async def test_dashboard_drop_off_reasons_groups_cold_and_lost_deals_by_reason_a
     response = await client.get("/api/v1/dashboard", headers=headers)
 
     assert response.status_code == 200
+    # One row per deal now (Account name/Tier are per-deal attributes) --
+    # Count/Trend no longer apply, so there's no group-by to key on besides
+    # each deal's own (reason, stage_lost, lost_value).
     entries = {(e["reason"], e["stage_lost"]): e for e in response.json()["drop_off_reasons"]["entries"]}
-    assert entries[("Pricing too high", "Unknown")]["count"] == 1
     assert entries[("Pricing too high", "Unknown")]["lost_value"] == 1000.0
-    assert entries[("Pricing too high", "Proposals")]["count"] == 1
+    assert entries[("Pricing too high", "Unknown")]["account_name"] == "DropOffCo"
+    assert entries[("Pricing too high", "Unknown")]["tier"] == "gold"
     assert entries[("Pricing too high", "Proposals")]["lost_value"] == 500.0
-    assert entries[("Competitor chosen", "Unknown")]["count"] == 1
     assert entries[("Competitor chosen", "Unknown")]["lost_value"] == 300.0
     # The 2020 drop-off must not appear at all in this month's list.
     assert ("Old reason", "Evaluation") not in entries
 
 
-async def test_dashboard_conversion_trend_counts_stage_transitions_within_period(
-    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, db_session
+async def test_dashboard_conversion_trend_computes_leads_to_account_rate_within_period(
+    client: AsyncClient, make_user, auth_headers, make_lead, make_account, db_session
 ):
     from datetime import datetime
 
-    from app.models.deal_stage_history import DealStageHistory
-
     user = await make_user(email="trend@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
-    account = await make_account(owner_id=user.id, company="TrendCo")
-    stage_a = await make_deal_stage(name="Evaluation", sort_order=1)
-    stage_b = await make_deal_stage(company_id=stage_a.company_id, name="Closed Won", sort_order=5)
-    deal = await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_b.id)
-    old_deal = await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_b.id)
 
-    db_session.add(DealStageHistory(deal_id=deal.id, from_stage_id=stage_a.id, to_stage_id=stage_b.id, changed_by=user.id))
-    old_transition = DealStageHistory(deal_id=old_deal.id, from_stage_id=stage_a.id, to_stage_id=stage_b.id, changed_by=user.id)
-    db_session.add(old_transition)
-    await db_session.flush()
-    old_transition.created_at = datetime(2020, 1, 1)
-    await db_session.flush()
+    # 2 leads created this month, 1 of them converted (Account.source_lead_id
+    # set) this month too -- rate should be 50%, not a raw stage-transition
+    # count (the metric this endpoint used to compute).
+    converted_lead = await make_lead(owner_id=user.id, email="trend-converted@example.com")
+    await make_lead(owner_id=user.id, email="trend-unconverted@example.com")
+    await make_account(owner_id=user.id, company="TrendCo", source_lead_id=converted_lead.id)
+
+    # An old lead+conversion (2020) must not leak into this month's rate.
+    old_lead = await make_lead(owner_id=user.id, email="trend-old@example.com", created_at=datetime(2020, 1, 1))
+    await make_account(
+        owner_id=user.id, company="OldTrendCo", source_lead_id=old_lead.id, created_at=datetime(2020, 1, 1)
+    )
     await db_session.commit()
 
     response = await client.get("/api/v1/dashboard?granularity=monthly", headers=headers)
 
     assert response.status_code == 200
     entries = response.json()["conversion_trend"]["entries"]
-    # Only the in-period transition counts — the 2020 one must not show up at all.
-    assert entries == [{"period": entries[0]["period"], "stage_name": "Closed Won", "count": 1}]
+    assert entries == [
+        {
+            "period": entries[0]["period"],
+            "leads_created": 2,
+            "leads_converted": 1,
+            "conversion_rate": 50.0,
+        }
+    ]
 
     custom_response = await client.get(
         "/api/v1/dashboard?granularity=monthly&period=custom&start_date=2020-01-01&end_date=2020-01-31",
@@ -602,7 +666,14 @@ async def test_dashboard_conversion_trend_counts_stage_transitions_within_period
     )
     assert custom_response.status_code == 200
     custom_entries = custom_response.json()["conversion_trend"]["entries"]
-    assert any(e["stage_name"] == "Closed Won" and e["count"] == 1 for e in custom_entries)
+    assert custom_entries == [
+        {
+            "period": custom_entries[0]["period"],
+            "leads_created": 1,
+            "leads_converted": 1,
+            "conversion_rate": 100.0,
+        }
+    ]
 
 
 async def test_dashboard_activity_feed_merges_and_sorts_across_entities_within_period(
@@ -624,17 +695,25 @@ async def test_dashboard_activity_feed_merges_and_sorts_across_entities_within_p
 
     db_session.add_all(
         [
-            DealActivity(deal_id=deal.id, type="call", note="Call about proposal", created_by=user.id, updated_by=user.id),
-            LeadActivity(lead_id=lead.id, type="note", note="Initial note", created_by=user.id, updated_by=user.id),
-            AccountActivity(account_id=account.id, type="meeting", note="Kickoff meeting", created_by=user.id, updated_by=user.id),
+            DealActivity(deal_id=deal.id, type="call", note="Call about proposal", created_by=user.id),
+            LeadActivity(lead_id=lead.id, type="note", note="Initial note", created_by=user.id),
+            AccountActivity(account_id=account.id, type="meeting", note="Kickoff meeting", created_by=user.id),
         ]
     )
-    old_activity = DealActivity(
-        deal_id=deal.id, type="call", note="Ancient call", created_by=user.id, updated_by=user.id
-    )
+    old_activity = DealActivity(deal_id=deal.id, type="call", note="Ancient call", created_by=user.id)
     db_session.add(old_activity)
     await db_session.flush()
     old_activity.created_at = datetime(2020, 1, 1)
+    await db_session.flush()
+
+    # Regression test: an activity edited this period must surface even
+    # though it was created long before it -- the feed used to only ever
+    # look at created_at, so an edit had no way to show up at all.
+    edited_old_activity = DealActivity(deal_id=deal.id, type="note", note="Edited long ago deal", created_by=user.id)
+    db_session.add(edited_old_activity)
+    await db_session.flush()
+    edited_old_activity.created_at = datetime(2020, 1, 2)
+    edited_old_activity.updated_by = user.id
     await db_session.flush()
     await db_session.commit()
 
@@ -642,6 +721,11 @@ async def test_dashboard_activity_feed_merges_and_sorts_across_entities_within_p
 
     assert response.status_code == 200
     body = response.json()["activity_feed"]["entries"]
-    assert len(body) == 3
+    assert len(body) == 4
     assert {e["entity_type"] for e in body} <= {"deal", "lead", "account"}
+    # The untouched 2020 activity still must not leak into this month's feed.
     assert all(e["note"] != "Ancient call" for e in body)
+    edited_entry = next(e for e in body if e["note"] == "Edited long ago deal")
+    assert edited_entry["action"] == "edited"
+    created_entries = [e for e in body if e["note"] != "Edited long ago deal"]
+    assert all(e["action"] == "created" for e in created_entries)

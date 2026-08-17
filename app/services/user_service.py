@@ -9,6 +9,7 @@ from fastapi import BackgroundTasks
 from sqlalchemy import ColumnElement, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.core.security import hash_password, verify_password
 from app.models.enums import AuditAction
@@ -153,7 +154,12 @@ async def list_users(
     return list(result.scalars().all())
 
 
-async def soft_delete_user(db: AsyncSession, user_id: int, actor_id: int) -> None:
+async def soft_delete_user(db: AsyncSession, user_id: int, actor_id: int, *, permanent: bool = False) -> None:
+    """Default (permanent=False) just deactivates -- the existing, tested
+    behavior of DELETE /users/{id}. permanent=True is a real removal from the
+    roster: sets is_delete (same flag create_user already checks to "revive"
+    a re-created user by email), so the row survives for FK/audit integrity
+    but disappears from list_users and can't log in."""
     result = await db.execute(
         select(User).where(User.id == user_id, User.is_delete.is_(False))
     )
@@ -161,16 +167,88 @@ async def soft_delete_user(db: AsyncSession, user_id: int, actor_id: int) -> Non
     if user is None:
         raise UserNotFoundError(f"User not found: {user_id}")
 
+    email = user.email
+
+    if permanent:
+        user.is_active = False
+        user.is_delete = True
+        await db.flush()
+        await log_audit(
+            db, table_name="users", record_id=user_id, action=AuditAction.DELETED,
+            actor_id=actor_id, description=f"User '{email}' deleted",
+        )
+        return
+
     if not user.is_active:
         return
 
-    email = user.email
     user.is_active = False
     await db.flush()
     await log_audit(
         db, table_name="users", record_id=user_id, action=AuditAction.DEACTIVATED,
         actor_id=actor_id, description=f"User '{email}' deactivated",
     )
+
+
+async def reinvite_user(
+    db: AsyncSession,
+    user_id: int,
+    email_sender: EmailSender,
+    actor_id: int,
+    background_tasks: BackgroundTasks | None = None,
+) -> User:
+    """Regenerates the user's password and resends the credentials email --
+    same mechanism as create_user's initial invite. Also reactivates the
+    account, since sending fresh login credentials to a deactivated user
+    would otherwise be a dead end."""
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.is_delete.is_(False))
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise UserNotFoundError(f"User not found: {user_id}")
+
+    password = _generate_password()
+    user.hashed_password = hash_password(password)
+    user.is_active = True
+    await db.flush()
+
+    await log_audit(
+        db, table_name="users", record_id=user.id, action=AuditAction.UPDATED,
+        actor_id=actor_id, description=f"User '{user.email}' re-invited",
+    )
+
+    if background_tasks is not None:
+        background_tasks.add_task(_send_new_user_email_safe, email_sender, user.email, password)
+    else:
+        await _send_new_user_email_safe(email_sender, user.email, password)
+
+    return user
+
+
+async def update_user_role(db: AsyncSession, user_id: int, role_id: int, actor_id: int) -> User:
+    role = await db.get(Role, role_id)
+    if role is None or role.is_delete:
+        raise RoleNotFoundError(f"Role not found: {role_id}")
+
+    result = await db.execute(
+        select(User).where(User.id == user_id, User.is_delete.is_(False)).options(selectinload(User.role))
+    )
+    user = result.scalar_one_or_none()
+    if user is None:
+        raise UserNotFoundError(f"User not found: {user_id}")
+
+    old_role_name = user.role.name
+    user.role_id = role_id
+    await db.flush()
+    await db.refresh(user, attribute_names=["role"])
+
+    await log_audit(
+        db, table_name="users", record_id=user.id, action=AuditAction.UPDATED,
+        actor_id=actor_id,
+        description=f"User '{user.email}' role changed from '{old_role_name}' to '{user.role.name}'",
+    )
+    return user
 
 
 async def activate_user(db: AsyncSession, user_id: int, actor_id: int) -> None:
@@ -196,6 +274,10 @@ class IncorrectPasswordError(Exception):
     """Raised when current_password doesn't match the user's stored hash."""
 
 
+class SamePasswordError(Exception):
+    """Raised when new_password matches the user's current password."""
+
+
 async def update_profile(db: AsyncSession, user: User, data: UserUpdate) -> User:
     user.first_name = data.first_name
     user.last_name = data.last_name
@@ -207,6 +289,8 @@ async def update_profile(db: AsyncSession, user: User, data: UserUpdate) -> User
 async def change_password(db: AsyncSession, user: User, current_password: str, new_password: str) -> None:
     if not verify_password(current_password, user.hashed_password):
         raise IncorrectPasswordError("Current password is incorrect")
+    if verify_password(new_password, user.hashed_password):
+        raise SamePasswordError("New password must be different from the current password")
     user.hashed_password = hash_password(new_password)
     # Naive UTC: written straight into the (timezone-naive) column with no
     # server-side tz conversion, so it compares directly against the JWT

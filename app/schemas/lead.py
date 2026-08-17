@@ -13,6 +13,8 @@ from app.schemas.validators import validate_linkedin_url, validate_phone
 class LeadContactInput(BaseModel):
     """An extra contact point beyond the lead's own primary email/phone."""
 
+    first_name: str | None = None
+    last_name: str | None = None
     email: EmailStr | None = None
     phone: str | None = None
 
@@ -28,6 +30,8 @@ class LeadContactInput(BaseModel):
 class LeadContactRead(ORMBase):
 
     id: int
+    first_name: str | None
+    last_name: str | None
     email: str | None
     phone: str | None
 

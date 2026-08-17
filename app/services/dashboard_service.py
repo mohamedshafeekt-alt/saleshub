@@ -213,28 +213,32 @@ async def get_deal_distribution(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> DealDistributionResponse:
-    # Scoped by `entered_current_stage_in` (deal_stage_history), not
-    # `created_at` -- same predicate _count_deals_closed/get_funnel use for
-    # their terminal-stage bars, and the one `GET /deals?date_field=closed_at`
-    # applies when a rep browses this same range on the Deals list. Was
-    # `created_at`-scoped, which counted a different set of deals than that
-    # list view for an identical date range (a deal created in-period but
-    # still open showed here but not there, and vice versa for one created
-    # earlier but moved stages in-period) -- reported as the tile and the
-    # list disagreeing for the same range.
+    # Same scoping as get_funnel: an open (non-terminal) stage counts every
+    # deal CURRENTLY sitting there regardless of period -- only terminal
+    # stages (Closed Won/Lost/Cold) are scoped by when the deal entered that
+    # stage. Was `entered_current_stage_in` alone, which silently dropped any
+    # open deal that hadn't changed stage within the period -- the funnel and
+    # the Deals list both counted it, but this donut didn't, so the same
+    # range showed 3 deals everywhere except here.
     today = date.today()
     start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
+    in_scope = or_(~is_terminal_stage(), entered_current_stage_in(start, end))
     result = await db.execute(
         select(Deal.tier, func.count(Deal.id), func.coalesce(func.sum(Deal.value), 0))
-        .where(
-            Deal.tier.is_not(None),
-            entered_current_stage_in(start, end),
-        )
+        .join(DealStage, Deal.stage_id == DealStage.id)
+        .where(in_scope)
         .group_by(Deal.tier)
     )
     return DealDistributionResponse(
         entries=[
-            DealDistributionEntry(tier=tier.value, count=count, total_value=float(total_value))
+            # tier is nullable on Deal -- untiered deals get an "Unassigned"
+            # bucket instead of being dropped, so the sum of entries here
+            # matches the Deals list's total count for the same range.
+            DealDistributionEntry(
+                tier=tier.value if tier is not None else "Unassigned",
+                count=count,
+                total_value=float(total_value),
+            )
             for tier, count, total_value in result.all()
         ]
     )
@@ -304,14 +308,18 @@ def _drop_off_query(lo: date | None = None, hi: date | None = None):
         .where(DealStageHistory.to_stage_id == Deal.stage_id)
         .subquery()
     )
+    # One row per deal (not grouped by reason) -- Account name/Tier are
+    # per-deal attributes, so a "Count"/"Trend" aggregate no longer applies.
     query = (
         select(
             Deal.cold_reason,
             func.coalesce(from_stage.name, "Unknown"),
-            func.count(Deal.id),
-            func.coalesce(func.sum(Deal.value), 0),
+            Account.company,
+            Account.tier,
+            Deal.value,
         )
         .join(DealStage, Deal.stage_id == DealStage.id)
+        .join(Account, Deal.account_id == Account.id)
         .join(latest_transition, latest_transition.c.deal_id == Deal.id, isouter=True)
         .join(from_stage, from_stage.id == latest_transition.c.from_stage_id, isouter=True)
         .where(
@@ -319,7 +327,6 @@ def _drop_off_query(lo: date | None = None, hi: date | None = None):
             (DealStage.is_cold.is_(True)) | (DealStage.name == CLOSED_LOST_STAGE_NAME),
             (latest_transition.c.rn == 1) | (latest_transition.c.rn.is_(None)),
         )
-        .group_by(Deal.cold_reason, from_stage.name)
     )
     if lo is not None and hi is not None:
         # A deal with no history row at all (the "Unknown" case) has a NULL
@@ -332,7 +339,7 @@ def _drop_off_query(lo: date | None = None, hi: date | None = None):
             effective_ts >= lo,
             effective_ts < hi + timedelta(days=1),
         )
-    return query.order_by(func.count(Deal.id).desc())
+    return query.order_by(Deal.value.desc())
 
 
 async def get_drop_off_reasons(
@@ -342,28 +349,20 @@ async def get_drop_off_reasons(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> DropOffReasonsResponse:
-    # `count`/`lost_value` must come from the SAME period-scoped query that
-    # feeds change_pct — previously `count`/`lost_value` were unscoped
-    # all-time totals while change_pct compared period-scoped subcounts,
-    # so a reason could show e.g. count=1 with change_pct=-100% (an old,
-    # out-of-period drop-off leaking into an otherwise-empty period).
     today = date.today()
-    start, end, prev_start, prev_end = _period_bounds(period, today, start_date=start_date, end_date=end_date)
+    start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
     now_rows = (await db.execute(_drop_off_query(start, end))).all()
-    prev_counts = {
-        (reason, stage): count for reason, stage, count, _ in (await db.execute(_drop_off_query(prev_start, prev_end))).all()
-    }
 
     return DropOffReasonsResponse(
         entries=[
             DropOffReasonEntry(
                 reason=reason,
                 stage_lost=stage_lost,
-                count=count,
+                account_name=account_name,
+                tier=tier.value,
                 lost_value=float(lost_value),
-                change_pct=_change_pct(count, prev_counts.get((reason, stage_lost), 0)),
             )
-            for reason, stage_lost, count, lost_value in now_rows
+            for reason, stage_lost, account_name, tier, lost_value in now_rows
         ]
     )
 
@@ -376,25 +375,64 @@ async def get_conversion_trend(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> ConversionTrendResponse:
+    # Leads -> Account conversion rate per period bucket. This used to count
+    # DealStageHistory transitions instead -- an unrelated deal-pipeline
+    # metric that had nothing to do with leads or accounts, so there was no
+    # way to manually verify a widget labeled "Leads to Account Conversion
+    # Trend" against it. Reuses the same facts _count_leads/
+    # _count_leads_converted already use for the single-window "Leads to
+    # Accounts" tile (Account.created_at, where source_lead_id is set,
+    # doubles as the conversion timestamp), just bucketed by granularity.
     today = date.today()
     start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
-    period_col = func.date_trunc(_TRUNC_UNIT[granularity], DealStageHistory.created_at)
-    result = await db.execute(
-        select(period_col, DealStage.name, func.count(DealStageHistory.id))
-        .join(DealStage, DealStageHistory.to_stage_id == DealStage.id)
+
+    leads_period_col = func.date_trunc(_TRUNC_UNIT[granularity], Lead.created_at)
+    leads_result = await db.execute(
+        select(leads_period_col, func.count(Lead.id))
+        .where(Lead.created_at >= start, Lead.created_at < end + timedelta(days=1))
+        .group_by(leads_period_col)
+    )
+    leads_by_period = {bucket.date().isoformat(): count for bucket, count in leads_result.all()}
+
+    converted_period_col = func.date_trunc(_TRUNC_UNIT[granularity], Account.created_at)
+    converted_result = await db.execute(
+        select(converted_period_col, func.count(Account.id))
         .where(
-            DealStageHistory.created_at >= start,
-            DealStageHistory.created_at < end + timedelta(days=1),
+            Account.source_lead_id.is_not(None),
+            Account.created_at >= start,
+            Account.created_at < end + timedelta(days=1),
         )
-        .group_by(period_col, DealStage.name)
-        .order_by(period_col)
+        .group_by(converted_period_col)
     )
-    return ConversionTrendResponse(
-        entries=[
-            ConversionTrendEntry(period=period.date().isoformat(), stage_name=stage_name, count=count)
-            for period, stage_name, count in result.all()
-        ]
-    )
+    converted_by_period = {bucket.date().isoformat(): count for bucket, count in converted_result.all()}
+
+    entries = []
+    for p in sorted(set(leads_by_period) | set(converted_by_period)):
+        created = leads_by_period.get(p, 0)
+        converted = converted_by_period.get(p, 0)
+        # A lead created in one bucket may convert in a later one -- an
+        # accepted period-boundary simplification (same class as
+        # _count_deals_in_pipeline's snapshot-vs-period tradeoff above),
+        # not solved here with cohort tracking.
+        rate = round(converted / created * 100, 1) if created else 0.0
+        entries.append(
+            ConversionTrendEntry(period=p, leads_created=created, leads_converted=converted, conversion_rate=rate)
+        )
+    return ConversionTrendResponse(entries=entries)
+
+
+def _activity_type_value(activity_type: object, *, default: str = "system") -> str:
+    # Normally always an enum member (loaded fresh from DB via a real
+    # SELECT, so SQLAlchemy's Enum type always deserializes it) -- but an
+    # object already resident in the session's identity map from an earlier
+    # write in the same session/transaction (e.g. test fixtures that
+    # construct rows directly with a raw string, then mutate/flush again)
+    # can retain whatever Python value it was assigned. Tolerate both shapes
+    # rather than crash on `.value`.
+    if activity_type is None:
+        return default
+    value = getattr(activity_type, "value", None)
+    return value if value is not None else str(activity_type)
 
 
 async def get_activity_feed(
@@ -447,12 +485,57 @@ async def get_activity_feed(
         .all()
     )
 
+    # Edits: same three tables, but keyed on updated_by/updated_at instead of
+    # created_by/created_at, so an edit made in-period surfaces as its own
+    # feed entry (sorted by when the edit happened) even if the activity was
+    # originally created outside the period.
+    deal_edit_rows = (
+        (
+            await db.execute(
+                select(DealActivity)
+                .where(DealActivity.updated_by.is_not(None), DealActivity.updated_at >= lo, DealActivity.updated_at < hi)
+                .order_by(DealActivity.updated_at.desc())
+                .limit(limit + offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    lead_edit_rows = (
+        (
+            await db.execute(
+                select(LeadActivity)
+                .where(LeadActivity.updated_by.is_not(None), LeadActivity.updated_at >= lo, LeadActivity.updated_at < hi)
+                .order_by(LeadActivity.updated_at.desc())
+                .limit(limit + offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    account_edit_rows = (
+        (
+            await db.execute(
+                select(AccountActivity)
+                .where(
+                    AccountActivity.updated_by.is_not(None),
+                    AccountActivity.updated_at >= lo,
+                    AccountActivity.updated_at < hi,
+                )
+                .order_by(AccountActivity.updated_at.desc())
+                .limit(limit + offset)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
     merged = (
         [
             ActivityFeedEntry(
                 entity_type="deal",
                 entity_id=a.deal_id,
-                type=a.type.value,
+                type=_activity_type_value(a.type),
                 note=a.note,
                 created_by_name=a.created_by_name,
                 created_at=a.created_at,
@@ -463,7 +546,7 @@ async def get_activity_feed(
             ActivityFeedEntry(
                 entity_type="lead",
                 entity_id=a.lead_id,
-                type=a.type.value if a.type else "system",
+                type=_activity_type_value(a.type),
                 note=a.note,
                 created_by_name=a.created_by_name,
                 created_at=a.created_at,
@@ -474,12 +557,51 @@ async def get_activity_feed(
             ActivityFeedEntry(
                 entity_type="account",
                 entity_id=a.account_id,
-                type=a.type.value,
+                type=_activity_type_value(a.type),
                 note=a.note,
                 created_by_name=a.created_by_name,
                 created_at=a.created_at,
             )
             for a in account_rows
+        ]
+        + [
+            ActivityFeedEntry(
+                entity_type="deal",
+                entity_id=a.deal_id,
+                type=_activity_type_value(a.type),
+                note=a.note,
+                created_by_name=a.updated_by_name or "Unknown",
+                created_at=a.updated_at,
+                action="edited",
+            )
+            for a in deal_edit_rows
+            if a.updated_at is not None
+        ]
+        + [
+            ActivityFeedEntry(
+                entity_type="lead",
+                entity_id=a.lead_id,
+                type=_activity_type_value(a.type),
+                note=a.note,
+                created_by_name=a.updated_by_name or "Unknown",
+                created_at=a.updated_at,
+                action="edited",
+            )
+            for a in lead_edit_rows
+            if a.updated_at is not None
+        ]
+        + [
+            ActivityFeedEntry(
+                entity_type="account",
+                entity_id=a.account_id,
+                type=_activity_type_value(a.type),
+                note=a.note,
+                created_by_name=a.updated_by_name or "Unknown",
+                created_at=a.updated_at,
+                action="edited",
+            )
+            for a in account_edit_rows
+            if a.updated_at is not None
         ]
     )
     merged.sort(key=lambda e: e.created_at, reverse=True)
