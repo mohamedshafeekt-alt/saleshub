@@ -2,7 +2,7 @@
 function (user/lead/account/deal/contact create-update-delete, login,
 logout, deactivate); list_audit_logs backs the Admin-only Audit Log screen."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -53,7 +53,10 @@ async def list_audit_logs(
     if date_from is not None:
         filters.append(AuditLog.created_at >= date_from)
     if date_to is not None:
-        filters.append(AuditLog.created_at <= date_to)
+        # date_to is a bare date (midnight); use the *next* day as the
+        # exclusive upper bound so logs from later that same day aren't
+        # dropped (ponytail: same fix as lead_activity_service.list_lead_activities).
+        filters.append(AuditLog.created_at < date_to + timedelta(days=1))
 
     count_query = select(func.count(AuditLog.id)).where(*filters)
     items_query = (

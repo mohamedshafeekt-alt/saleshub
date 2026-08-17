@@ -33,11 +33,11 @@ async def create_account_contact(
     """data.contact_id must be None -- the dispatch on that field happens in
     the route, same as LeadUpsert. first_name is guaranteed non-None here by
     AccountContactUpsert's validator."""
-    await get_account(db, account_id, requester)  # existence + ownership check
+    account = await get_account(db, account_id, requester)  # existence + ownership check
 
     is_primary = data.is_primary or False
     if is_primary and await account_has_primary_contact(db, account_id):
-        raise PrimaryContactAlreadyExistsError(f"Account {account_id} already has a primary contact")
+        raise PrimaryContactAlreadyExistsError(f"Account '{account.company}' already has a primary contact")
 
     contact = Contact(
         first_name=data.first_name,
@@ -96,7 +96,7 @@ async def update_account_contact(
     and/or its is_primary flag for this account. If (account_id, contact_id)
     has no existing link, one is created -- this is how an already-existing
     contact gets associated with another account."""
-    await get_account(db, account_id, requester)
+    account = await get_account(db, account_id, requester)
     contact = await _get_contact_or_raise(db, contact_id)
 
     for field, value in data.model_dump(exclude_unset=True, exclude={"contact_id", "is_primary"}).items():
@@ -107,7 +107,7 @@ async def update_account_contact(
     is_primary = data.is_primary if data.is_primary is not None else was_already_primary
 
     if is_primary and not was_already_primary and await account_has_primary_contact(db, account_id):
-        raise PrimaryContactAlreadyExistsError(f"Account {account_id} already has a primary contact")
+        raise PrimaryContactAlreadyExistsError(f"Account '{account.company}' already has a primary contact")
 
     if contact_account is None:
         contact_account = ContactAccount(contact_id=contact_id, account_id=account_id, is_primary=is_primary)

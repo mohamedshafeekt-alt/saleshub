@@ -2,13 +2,13 @@
 Note/Meeting/Call/Comment/Follow-up against a Lead, gated by the same
 existence/ownership check as the rest of the Lead API."""
 
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.permission_codes import LEADS_DELETE_ANY_ACTIVITY
+from app.core.permission_codes import LEADS_DELETE_ANY_ACTIVITY, LEADS_VIEW_ALL
 from app.models.enums import LeadActivityType
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
@@ -49,7 +49,10 @@ async def list_lead_activities(
     if date_from is not None:
         query = query.where(LeadActivity.created_at >= date_from)
     if date_to is not None:
-        query = query.where(LeadActivity.created_at < date_to)
+        # date_to is a bare date (midnight); use the *next* day as the
+        # exclusive upper bound so activities logged on date_to itself
+        # aren't dropped (ponytail: same fix as audit_service.list_audit_logs).
+        query = query.where(LeadActivity.created_at < date_to + timedelta(days=1))
     query = query.order_by(LeadActivity.created_at.desc())
 
     result = await db.execute(query)
@@ -76,7 +79,7 @@ async def update_lead_activity(
     db: AsyncSession, lead_id: int, activity_id: int, data: LeadActivityUpdate, requester: User
 ) -> LeadActivity:
     lead, activity = await _get_lead_and_activity_or_raise(db, lead_id, activity_id, requester)
-    if lead.owner_id != requester.id:
+    if LEADS_VIEW_ALL not in requester.permission_codes and lead.owner_id != requester.id:
         raise LeadAccessForbiddenError(f"Only the lead owner can edit its activities: lead {lead_id}")
 
     for field, value in data.model_dump(exclude_unset=True).items():

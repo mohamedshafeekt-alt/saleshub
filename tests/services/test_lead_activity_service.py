@@ -130,18 +130,36 @@ async def test_update_lead_activity_applies_changes_and_stamps_editor(db_session
 
 async def test_update_lead_activity_raises_forbidden_for_non_owner(db_session: AsyncSession, make_lead):
     owner = await _make_user(db_session, "owner-update-activity-forbidden@example.com", UserRole.SALES_REP)
-    manager = await _make_user(db_session, "manager-update-activity@example.com", UserRole.SALES_MANAGER)
-    admin = await _make_user(db_session, "admin-update-activity@example.com", UserRole.ADMIN)
+    other_rep = await _make_user(db_session, "other-rep-update-activity@example.com", UserRole.SALES_REP)
     lead = await make_lead(owner_id=owner.id, email="update-activity-forbidden@example.com")
     activity = LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="original", created_by=owner.id)
     db_session.add(activity)
     await db_session.flush()
 
-    for non_owner in (manager, admin):
-        with pytest.raises(LeadAccessForbiddenError):
-            await update_lead_activity(
-                db_session, lead.id, activity.id, LeadActivityUpdate(note="revised"), requester=non_owner
-            )
+    with pytest.raises(LeadAccessForbiddenError):
+        await update_lead_activity(
+            db_session, lead.id, activity.id, LeadActivityUpdate(note="revised"), requester=other_rep
+        )
+
+
+async def test_update_lead_activity_allows_view_all_holder(db_session: AsyncSession, make_lead):
+    """A Sales Manager / Admin can edit activities on leads they don't own,
+    same as they can already view any lead via LEADS_VIEW_ALL."""
+    owner = await _make_user(db_session, "owner-update-activity-viewall@example.com", UserRole.SALES_REP)
+    manager = await _make_user(db_session, "manager-update-activity-viewall@example.com", UserRole.SALES_MANAGER)
+    admin = await _make_user(db_session, "admin-update-activity-viewall@example.com", UserRole.ADMIN)
+    lead = await make_lead(owner_id=owner.id, email="update-activity-viewall@example.com")
+
+    for viewer in (manager, admin):
+        activity = LeadActivity(lead_id=lead.id, type=LeadActivityType.NOTE, note="original", created_by=owner.id)
+        db_session.add(activity)
+        await db_session.flush()
+
+        updated = await update_lead_activity(
+            db_session, lead.id, activity.id, LeadActivityUpdate(note="revised"), requester=viewer
+        )
+        assert updated.note == "revised"
+        assert updated.updated_by == viewer.id
 
 
 async def test_update_lead_activity_raises_not_found_for_missing_activity(db_session: AsyncSession, make_lead):

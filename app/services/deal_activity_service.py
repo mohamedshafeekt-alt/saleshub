@@ -8,7 +8,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.permission_codes import DEALS_DELETE_ANY_ACTIVITY
+from app.core.permission_codes import DEALS_DELETE_ANY_ACTIVITY, DEALS_VIEW_ALL
 from app.models.deal import Deal
 from app.models.deal_activity import DealActivity
 from app.models.enums import DealActivityType
@@ -78,7 +78,7 @@ async def update_deal_activity(
     db: AsyncSession, deal_id: int, activity_id: int, data: DealActivityUpdate, requester: User
 ) -> DealActivity:
     deal, activity = await _get_deal_and_activity_or_raise(db, deal_id, activity_id, requester)
-    if deal.owner_id != requester.id:
+    if DEALS_VIEW_ALL not in requester.permission_codes and deal.owner_id != requester.id:
         raise DealAccessForbiddenError(f"Only the deal owner can edit its activities: deal {deal_id}")
 
     for field, value in data.model_dump(exclude_unset=True).items():

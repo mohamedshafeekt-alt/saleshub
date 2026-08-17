@@ -74,9 +74,21 @@ async def create_lead(
             raise DuplicateLeadEmailError(f"Email already exists: {data.email}") from exc
         raise
 
-    db.add(LeadContact(lead_id=lead.id, email=lead.email, phone=lead.phone))
+    db.add(
+        LeadContact(
+            lead_id=lead.id, first_name=lead.first_name, last_name=lead.last_name, email=lead.email, phone=lead.phone
+        )
+    )
     for contact in data.contacts:
-        db.add(LeadContact(lead_id=lead.id, email=contact.email, phone=contact.phone))
+        db.add(
+            LeadContact(
+                lead_id=lead.id,
+                first_name=contact.first_name,
+                last_name=contact.last_name,
+                email=contact.email,
+                phone=contact.phone,
+            )
+        )
     try:
         await db.flush()
     except IntegrityError as exc:
@@ -90,7 +102,11 @@ async def create_lead(
         .join(Role, User.role_id == Role.id)
         .join(role_permissions, Role.id == role_permissions.c.role_id)
         .join(Permission, role_permissions.c.permission_id == Permission.id)
-        .where(Permission.code == LEADS_NOTIFY_ON_CREATE)
+        .where(
+            Permission.code == LEADS_NOTIFY_ON_CREATE,
+            User.is_active.is_(True),
+            User.is_delete.is_(False),
+        )
     )
     lead_name = lead.name
     for notifiable in result.scalars():

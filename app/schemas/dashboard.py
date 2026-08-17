@@ -52,9 +52,9 @@ class LeaderboardResponse(BaseModel):
 class DropOffReasonEntry(BaseModel):
     reason: str
     stage_lost: str
-    count: int
+    account_name: str
+    tier: str
     lost_value: float
-    change_pct: float | None = None
 
 
 class DropOffReasonsResponse(BaseModel):
@@ -63,8 +63,9 @@ class DropOffReasonsResponse(BaseModel):
 
 class ConversionTrendEntry(BaseModel):
     period: str
-    stage_name: str
-    count: int
+    leads_created: int
+    leads_converted: int
+    conversion_rate: float
 
 
 class ConversionTrendResponse(BaseModel):
@@ -78,6 +79,10 @@ class ActivityFeedEntry(ORMBase):
     note: str
     created_by_name: str
     created_at: datetime
+    # "edited" entries reuse created_by_name/created_at for whoever made the
+    # edit and when -- so an edited activity sorts into the feed by its edit
+    # time, not its original creation time.
+    action: Literal["created", "edited"] = "created"
 
 
 class ActivityFeedResponse(BaseModel):

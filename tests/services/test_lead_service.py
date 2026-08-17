@@ -124,14 +124,23 @@ async def test_create_lead_inserts_extra_contacts_alongside_primary(db_session: 
         email="primary-with-extra@acme.com",
         source=LeadSource.WEBSITE,
         owner_id=owner.id,
-        contacts=[LeadContactInput(email="second@acme.com"), LeadContactInput(email="third@acme.com")],
+        contacts=[
+            LeadContactInput(first_name="Sam", last_name="Iyer", email="second@acme.com"),
+            LeadContactInput(email="third@acme.com"),
+        ],
     )
     lead = await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
     result = await db_session.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
-    emails = {contact.email for contact in result.scalars().all()}
+    contacts = {contact.email: contact for contact in result.scalars().all()}
 
-    assert emails == {"primary-with-extra@acme.com", "second@acme.com", "third@acme.com"}
+    assert set(contacts) == {"primary-with-extra@acme.com", "second@acme.com", "third@acme.com"}
+    # Regression test: an additional contact's own name is persisted rather
+    # than being silently dropped (it used to have nowhere to go, so the
+    # lead's own name got reused for every extra contact on conversion).
+    assert contacts["second@acme.com"].first_name == "Sam"
+    assert contacts["second@acme.com"].last_name == "Iyer"
+    assert contacts["third@acme.com"].first_name is None
 
 
 async def test_create_lead_notifies_all_admins(db_session: AsyncSession):
@@ -150,6 +159,28 @@ async def test_create_lead_notifies_all_admins(db_session: AsyncSession):
 
     notified = {call["to"] for call in fake_sender.calls}
     assert notified == {admin_a.email, admin_b.email}
+
+
+async def test_create_lead_does_not_notify_deactivated_or_deleted_admins(db_session: AsyncSession):
+    admin_active = await _make_user(db_session, "admin-active@example.com", UserRole.ADMIN)
+    admin_deactivated = await _make_user(db_session, "admin-deactivated@example.com", UserRole.ADMIN)
+    admin_deactivated.is_active = False
+    admin_deleted = await _make_user(db_session, "admin-deleted@example.com", UserRole.ADMIN)
+    admin_deleted.is_active = False
+    admin_deleted.is_delete = True
+    await db_session.flush()
+    fake_sender = FakeEmailSender()
+
+    data = LeadUpsert(
+        first_name="Jane",
+        company="Acme Corp",
+        email="notify-active-only@acme.com",
+        source=LeadSource.WEBSITE,
+    )
+    await create_lead(db_session, data, fake_sender, requester=admin_active)
+
+    notified = {call["to"] for call in fake_sender.calls}
+    assert notified == {admin_active.email}
 
 
 async def test_create_lead_defers_notify_emails_to_background_task(db_session: AsyncSession):
