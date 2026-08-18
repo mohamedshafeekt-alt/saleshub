@@ -466,7 +466,7 @@ async def test_list_deals_stage_state_open_with_closed_at_matches_deals_in_pipel
     open_stage = await make_deal_stage(name="Evaluation", sort_order=1)
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
 
-    # Entered its open stage this month -- counts.
+    # Entered its open stage Monthly -- counts.
     await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id, with_history=True)
     # Entered its open stage long before this period -- excluded from both sides.
     stale = await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id)

@@ -55,9 +55,9 @@ def _period_bounds(
             raise ValueError("end_date must not be before start_date")
         start, end = start_date, end_date
     elif period == "this_week":
-        start, end = today - timedelta(days=today.weekday()), today
+        start, end = today - timedelta(days=6), today
     else:
-        start, end = today.replace(day=1), today
+        start, end = today - timedelta(days=29), today
     length = (end - start).days + 1
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=length - 1)

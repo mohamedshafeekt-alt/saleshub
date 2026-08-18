@@ -54,7 +54,7 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5, is_cold=False)
     lost_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Lost", sort_order=6, is_cold=False)
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=1000, with_history=True)
-    # Won this month: recorded as a real transition, since that (not
+    # Won Monthly: recorded as a real transition, since that (not
     # Deal.updated_at) is what dates a close.
     won_this_month = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=2000)
     await make_stage_change(won_this_month, to_stage_id=won_stage.id, at=datetime.now())
@@ -65,7 +65,7 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     old_account.created_at = datetime(2020, 1, 1)
     # Entered its (open) stage back in 2020 and never moved since — still
     # open today, but a time range means "entered this stage within the
-    # window", for open stages too, so this month's tile must exclude it.
+    # window", for open stages too, so Monthly's tile must exclude it.
     await make_deal(
         account_id=account.id,
         owner_id=user.id,
@@ -89,7 +89,7 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     summary = response.json()["summary"]
     assert summary["leads_generated"]["value"] == 3
     assert summary["leads_to_accounts"]["value"] == 1
-    # deals_in_pipeline = entered an open stage this month — excludes the
+    # deals_in_pipeline = entered an open stage Monthly — excludes the
     # 2020 deal that's still open but hasn't moved since.
     assert summary["deals_in_pipeline"]["value"] == 1
     # Only Closed Won counts as "closed" — the Closed Lost deal above must not.
@@ -104,7 +104,7 @@ async def test_dashboard_deals_in_pipeline_is_scoped_by_when_the_deal_entered_it
     """Open stages are period-scoped by entered_current_stage_in, same as
     terminal stages -- a deal entered TODAY must not show up for an old custom
     range, and a deal that entered its stage long ago must not show up for
-    this month. A time range means "moved within this window", for every
+    Monthly. A time range means "moved within this window", for every
     stage, not just terminal ones."""
     from datetime import datetime
 
@@ -114,9 +114,9 @@ async def test_dashboard_deals_in_pipeline_is_scoped_by_when_the_deal_entered_it
     open_stage = await make_deal_stage(name="Evaluation", sort_order=1, is_cold=False)
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5, is_cold=False)
 
-    # Entered its open stage today -- counts for this month, not for 2020.
+    # Entered its open stage today -- counts for Monthly, not for 2020.
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=100, with_history=True)
-    # Entered its open stage back in 2020 -- counts for that old range, not this month.
+    # Entered its open stage back in 2020 -- counts for that old range, not Monthly.
     old_open = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=150)
     await make_stage_change(old_open, to_stage_id=open_stage.id, at=datetime(2020, 3, 1))
     # Currently closed -- never counts as pipeline, in either period.
@@ -201,7 +201,7 @@ async def test_dashboard_funnel_period_scopes_every_stage_by_when_the_deal_enter
     stage_b = await make_deal_stage(company_id=stage_a.company_id, name="Qualified to Buy", sort_order=1)
     won_stage = await make_deal_stage(company_id=stage_a.company_id, name="Closed Won", sort_order=5)
 
-    # Open stage: period-scoped like any other -- entered this month counts,
+    # Open stage: period-scoped like any other -- entered Monthly counts,
     # entered back in 2020 (and never moved since) does not.
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_a.id, with_history=True)
     await make_deal(
@@ -210,7 +210,7 @@ async def test_dashboard_funnel_period_scopes_every_stage_by_when_the_deal_enter
     await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_b.id, with_history=True)
 
     # Terminal stage: period-scoped by when the deal entered it, same as
-    # deals_closed — the 2020 win must not count in this month's Closed Won bar.
+    # deals_closed — the 2020 win must not count in Monthly's Closed Won bar.
     # Both start in Qualified to Buy and move out, so that bar stays at 1.
     won_this_month = await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_b.id)
     await make_stage_change(won_this_month, to_stage_id=won_stage.id, at=datetime.now())
@@ -368,7 +368,7 @@ async def test_dashboard_leaderboard_ranks_owners_by_won_revenue_within_period(
 async def test_dashboard_deals_closed_dates_the_close_not_the_last_edit(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change, db_session
 ):
-    """A 2020 win edited today must not land in this month's numbers.
+    """A 2020 win edited today must not land in Monthly's numbers.
 
     This is the regression that killed Deal.updated_at as a close timestamp:
     Base.updated_at carries onupdate=func.now(), so a rename is enough to drag a
@@ -414,7 +414,7 @@ async def test_dashboard_deals_closed_tile_matches_deals_list_closed_at_drill_do
     date_field=closed_at is the lens that reconciles them; this asserts the
     contract directly so it can't drift apart again.
     """
-    from datetime import date, datetime
+    from datetime import date, datetime, timedelta
 
     user = await make_user(email="drilldown@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
@@ -422,12 +422,12 @@ async def test_dashboard_deals_closed_tile_matches_deals_list_closed_at_drill_do
     open_stage = await make_deal_stage(name="Contracts", sort_order=4)
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
 
-    # Opened long ago, won this month — in the tile, but NOT in a created_at-filtered list.
+    # Opened long ago, won Monthly — in the tile, but NOT in a created_at-filtered list.
     old_deal_new_win = await make_deal(
         account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=1000, created_at=datetime(2020, 1, 1)
     )
     await make_stage_change(old_deal_new_win, to_stage_id=won_stage.id, at=datetime.now())
-    # Opened and won this month — in both.
+    # Opened and won Monthly — in both.
     fresh_win = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=2000)
     await make_stage_change(fresh_win, to_stage_id=won_stage.id, at=datetime.now())
     # Won in 2020, and still open today — in neither.
@@ -448,7 +448,7 @@ async def test_dashboard_deals_closed_tile_matches_deals_list_closed_at_drill_do
     today = date.today()
     drill_down = await client.get(
         f"/api/v1/deals?view=list&date_field=closed_at&stage_id={won_stage.id}"
-        f"&date_from={today.replace(day=1)}&date_to={today}",
+        f"&date_from={today - timedelta(days=29)}&date_to={today}",
         headers=headers,
     )
     assert drill_down.status_code == 200
@@ -476,7 +476,7 @@ async def test_dashboard_deals_closed_drill_down_excludes_lost_and_cold_deals(
     in test_deals.py), so a normal date-range browse on the Deals page could
     silently narrow to Closed Won only and hide every open-stage deal.
     """
-    from datetime import date, datetime
+    from datetime import date, datetime, timedelta
 
     user = await make_user(email="drilldown-lost@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
@@ -499,7 +499,7 @@ async def test_dashboard_deals_closed_drill_down_excludes_lost_and_cold_deals(
     today = date.today()
     drill_down = await client.get(
         f"/api/v1/deals?view=list&date_field=closed_at&stage_id={won_stage.id}"
-        f"&date_from={today.replace(day=1)}&date_to={today}",
+        f"&date_from={today - timedelta(days=29)}&date_to={today}",
         headers=headers,
     )
     assert drill_down.status_code == 200
@@ -541,7 +541,7 @@ async def test_dashboard_deals_closed_counts_a_re_won_deal_only_in_its_latest_cl
     """A deal won, re-opened, then re-won has TWO transitions into Closed Won.
 
     Only the most recent one counts. Testing "is there any entry into Closed Won
-    in this range" would put the deal in both March's and this month's
+    in this range" would put the deal in both March's and Monthly's
     deals_closed, so summing the months would exceed the distinct deal count.
     """
     from datetime import datetime
@@ -606,7 +606,7 @@ async def test_dashboard_drop_off_reasons_groups_cold_and_lost_deals_by_reason_a
     await db_session.commit()
 
     # An old drop-off (stage-lost transition dated 2020) — must not leak into
-    # this month's count/lost_value, only the ones above should show.
+    # Monthly's count/lost_value, only the ones above should show.
     old_stage = await make_deal_stage(company_id=open_stage.company_id, name="Evaluation", sort_order=1)
     old_dropped = await make_deal(
         account_id=account.id, owner_id=user.id, stage_id=cold_stage.id, cold_reason="Old reason", value=8888
@@ -632,7 +632,7 @@ async def test_dashboard_drop_off_reasons_groups_cold_and_lost_deals_by_reason_a
     assert entries[("Pricing too high", "Unknown")]["tier"] == "gold"
     assert entries[("Pricing too high", "Proposals")]["lost_value"] == 500.0
     assert entries[("Competitor chosen", "Unknown")]["lost_value"] == 300.0
-    # The 2020 drop-off must not appear at all in this month's list.
+    # The 2020 drop-off must not appear at all in Monthly's list.
     assert ("Old reason", "Evaluation") not in entries
 
 
@@ -644,14 +644,14 @@ async def test_dashboard_conversion_trend_computes_leads_to_account_rate_within_
     user = await make_user(email="trend@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
 
-    # 2 leads created this month, 1 of them converted (Account.source_lead_id
-    # set) this month too -- rate should be 50%, not a raw stage-transition
+    # 2 leads created Monthly, 1 of them converted (Account.source_lead_id
+    # set) Monthly too -- rate should be 50%, not a raw stage-transition
     # count (the metric this endpoint used to compute).
     converted_lead = await make_lead(owner_id=user.id, email="trend-converted@example.com")
     await make_lead(owner_id=user.id, email="trend-unconverted@example.com")
     await make_account(owner_id=user.id, company="TrendCo", source_lead_id=converted_lead.id)
 
-    # An old lead+conversion (2020) must not leak into this month's rate.
+    # An old lead+conversion (2020) must not leak into Monthly's rate.
     old_lead = await make_lead(owner_id=user.id, email="trend-old@example.com", created_at=datetime(2020, 1, 1))
     await make_account(
         owner_id=user.id, company="OldTrendCo", source_lead_id=old_lead.id, created_at=datetime(2020, 1, 1)
@@ -734,7 +734,7 @@ async def test_dashboard_activity_feed_merges_and_sorts_across_entities_within_p
     body = response.json()["activity_feed"]["entries"]
     assert len(body) == 4
     assert {e["entity_type"] for e in body} <= {"deal", "lead", "account"}
-    # The untouched 2020 activity still must not leak into this month's feed.
+    # The untouched 2020 activity still must not leak into Monthly's feed.
     assert all(e["note"] != "Ancient call" for e in body)
     edited_entry = next(e for e in body if e["note"] == "Edited long ago deal")
     assert edited_entry["action"] == "edited"
