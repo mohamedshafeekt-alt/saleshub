@@ -16,7 +16,7 @@ from app.models.account import Account
 from app.models.contact import Contact
 from app.models.deal import Deal
 from app.models.deal_contact import DealContact
-from app.models.deal_stage import CLOSED_LOST_STAGE_NAME, CLOSED_WON_STAGE_NAME, DealStage, is_terminal_stage
+from app.models.deal_stage import CLOSED_LOST_STAGE_NAME, DealStage, is_terminal_stage
 from app.models.deal_stage_history import DealStageHistory, entered_current_stage_in
 from app.models.enums import AuditAction, LeadTier, NotificationType
 from app.models.user import User
@@ -189,41 +189,30 @@ def _deal_filters(
     # Lost, or cold) -- a general closed-deals filter. `.has()` keeps this a
     # correlated EXISTS so it works whether or not the caller already joined
     # DealStage (list and board don't, export does).
-    #
-    # ponytail: this reads the deal's stage RIGHT NOW, so it reproduces the
-    # dashboard's Deals in Pipeline tile only when the period ends today
-    # (this_week/this_month). For a past custom range the tile reconstructs the
-    # stage as of the period end (dashboard_service.stage_as_of) and will count a
-    # deal that was open then but is closed now; this filter won't. Add an
-    # `open_as_of=<date>` param reusing stage_as_of if past-period drill-downs
-    # start mattering.
     if stage_state == "open":
         filters.append(~Deal.stage.has(is_terminal_stage()))
     elif stage_state == "closed":
         filters.append(Deal.stage.has(is_terminal_stage()))
-    elif date_field == "closed_at" and not stage_id:
-        # date_field=closed_at with no explicit stage_state or stage_id is the
-        # dashboard's "Deals Closed" tile drill-down
-        # (dashboard_service._count_deals_closed), which is Closed Won only --
-        # not "any terminal stage". Without this, a Closed Lost or cold deal
-        # that closed in the same window silently padded the drill-down past
-        # the tile's own count. A caller pinning stage_id explicitly (e.g. the
-        # funnel's Closed Lost/Cold bars) already says exactly which stage it
-        # wants, so this default is skipped rather than conflicting with it.
-        filters.append(Deal.stage.has(DealStage.name == CLOSED_WON_STAGE_NAME))
+    # ponytail: used to also infer "Closed Won only" whenever `date_field ==
+    # "closed_at" and not stage_id`, guessing that meant the dashboard's Deals
+    # Closed tile drill-down (which is Closed Won only, not "any terminal
+    # stage"). That drill-down's onTap is currently disabled frontend-side, so
+    # nothing calls it that way -- but the plain on-page date-range filter
+    # shares the exact same signature (closed_at, no stage_id) on its very
+    # first request, before the page's own defensive "select every stage"
+    # dispatch lands, so it silently collapsed a normal "show deals closed or
+    # open in this range" query down to Closed-Won-only. Removed rather than
+    # patched: a future drill-down should pass `stage_id=[<closed won id>]`
+    # explicitly, which already composes correctly above, instead of being
+    # inferred from what's absent.
 
     if date_field == "closed_at":
         if date_from is not None or date_to is not None:
-            # Open stages stay unscoped by date here too -- same `in_scope` rule
-            # dashboard_service.get_funnel uses for its open-stage bars, which are
-            # a live count regardless of period. Without the `~is_terminal_stage()`
-            # half, a deal still sitting in e.g. Qualified to Buy or Evaluation
-            # dropped out of a date-filtered deals list even though the funnel
-            # counted it for that same range (period-agnostic for open stages),
-            # so the two disagreed on open-stage counts for an identical window.
-            # A terminal stage's `entered_current_stage_in` date is its real close
-            # date, so that half is unaffected.
-            filters.append(or_(~Deal.stage.has(is_terminal_stage()), entered_current_stage_in(date_from, date_to)))
+            # entered_current_stage_in -- the same predicate every dashboard
+            # widget uses -- for every stage, open or terminal, so this list
+            # agrees with the tiles/funnel/distribution by construction, for
+            # any date range.
+            filters.append(entered_current_stage_in(date_from, date_to))
     else:
         if date_from is not None:
             filters.append(Deal.created_at >= date_from)

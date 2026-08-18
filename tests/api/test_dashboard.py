@@ -53,7 +53,7 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     open_stage = await make_deal_stage(name="Evaluation", sort_order=2, is_cold=False)
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5, is_cold=False)
     lost_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Lost", sort_order=6, is_cold=False)
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=1000)
+    await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=1000, with_history=True)
     # Won this month: recorded as a real transition, since that (not
     # Deal.updated_at) is what dates a close.
     won_this_month = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=2000)
@@ -63,9 +63,17 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     # An old account, both outside the current-month window.
     old_account = await make_account(owner_id=user.id, company="OldCo")
     old_account.created_at = datetime(2020, 1, 1)
-    # Opened in 2020 but still open today — still belongs in the pipeline.
-    old_open_deal = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=9999)
-    old_open_deal.created_at = datetime(2020, 1, 1)
+    # Entered its (open) stage back in 2020 and never moved since — still
+    # open today, but a time range means "entered this stage within the
+    # window", for open stages too, so this month's tile must exclude it.
+    await make_deal(
+        account_id=account.id,
+        owner_id=user.id,
+        stage_id=open_stage.id,
+        value=9999,
+        with_history=True,
+        created_at=datetime(2020, 1, 1),
+    )
     # Opened AND won back in 2020 — out of the pipeline, and out of THIS
     # month's deals_closed even though it sits in Closed Won today.
     old_closed_deal = await make_deal(
@@ -81,52 +89,50 @@ async def test_dashboard_counts_leads_and_deals_in_current_month(
     summary = response.json()["summary"]
     assert summary["leads_generated"]["value"] == 3
     assert summary["leads_to_accounts"]["value"] == 1
-    # deals_in_pipeline = open right now — includes the still-open 2020 deal,
-    # excludes the one that closed back in 2020.
-    assert summary["deals_in_pipeline"]["value"] == 2
+    # deals_in_pipeline = entered an open stage this month — excludes the
+    # 2020 deal that's still open but hasn't moved since.
+    assert summary["deals_in_pipeline"]["value"] == 1
     # Only Closed Won counts as "closed" — the Closed Lost deal above must not.
     assert summary["deals_closed"]["value"] == 1
     # num_accounts = accounts created this period — the 2020 account must not count.
     assert summary["num_accounts"]["value"] == 2
 
 
-async def test_dashboard_deals_in_pipeline_is_a_snapshot_as_of_period_end(
+async def test_dashboard_deals_in_pipeline_is_scoped_by_when_the_deal_entered_its_stage(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change, db_session
 ):
+    """Open stages are period-scoped by entered_current_stage_in, same as
+    terminal stages -- a deal entered TODAY must not show up for an old custom
+    range, and a deal that entered its stage long ago must not show up for
+    this month. A time range means "moved within this window", for every
+    stage, not just terminal ones."""
     from datetime import datetime
 
-    user = await make_user(email="pipeline-snapshot@example.com", role=UserRole.SALES_MANAGER)
+    user = await make_user(email="pipeline-scoped@example.com", role=UserRole.SALES_MANAGER)
     headers = auth_headers(user)
-    account = await make_account(owner_id=user.id, company="SnapshotCo")
+    account = await make_account(owner_id=user.id, company="PipelineScopedCo")
     open_stage = await make_deal_stage(name="Evaluation", sort_order=1, is_cold=False)
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5, is_cold=False)
 
-    opened = {"created_at": datetime(2020, 1, 1), "with_history": True}
-
-    # Opened before the snapshot date, never closed — open at the snapshot AND today.
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=100, **opened)
-    # Opened before, closed before the snapshot date — gone by then already.
-    closed_before = await make_deal(
-        account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=200, **opened
-    )
-    await make_stage_change(closed_before, to_stage_id=won_stage.id, at=datetime(2020, 2, 1))
-    # Opened before, closed AFTER the snapshot date — was still open at the
-    # snapshot even though it's closed now. Proves the as-of reconstruction,
-    # not just "currently open".
-    closed_after = await make_deal(
-        account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=300, **opened
-    )
-    await make_stage_change(closed_after, to_stage_id=won_stage.id, at=datetime(2020, 8, 1))
+    # Entered its open stage today -- counts for this month, not for 2020.
+    await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=100, with_history=True)
+    # Entered its open stage back in 2020 -- counts for that old range, not this month.
+    old_open = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=150)
+    await make_stage_change(old_open, to_stage_id=open_stage.id, at=datetime(2020, 3, 1))
+    # Currently closed -- never counts as pipeline, in either period.
+    closed = await make_deal(account_id=account.id, owner_id=user.id, stage_id=open_stage.id, value=200)
+    await make_stage_change(closed, to_stage_id=won_stage.id, at=datetime(2020, 2, 1))
     await db_session.flush()
     await db_session.commit()
 
-    response = await client.get(
+    this_month = await client.get("/api/v1/dashboard", headers=headers)
+    old_period = await client.get(
         "/api/v1/dashboard?period=custom&start_date=2020-01-01&end_date=2020-06-30", headers=headers
     )
 
-    assert response.status_code == 200
-    # As of 2020-06-30: still_open and closed_after were open; closed_before wasn't.
-    assert response.json()["summary"]["deals_in_pipeline"]["value"] == 2
+    assert this_month.status_code == 200 and old_period.status_code == 200
+    assert this_month.json()["summary"]["deals_in_pipeline"]["value"] == 1
+    assert old_period.json()["summary"]["deals_in_pipeline"]["value"] == 1
 
 
 async def test_dashboard_requires_authentication(client: AsyncClient):
@@ -183,7 +189,7 @@ async def test_dashboard_custom_period_scopes_leads_to_given_range(
     assert response.json()["summary"]["leads_generated"]["value"] == 1
 
 
-async def test_dashboard_funnel_live_counts_open_stages_and_period_scopes_terminal_stages(
+async def test_dashboard_funnel_period_scopes_every_stage_by_when_the_deal_entered_it(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change, db_session
 ):
     from datetime import datetime
@@ -195,11 +201,13 @@ async def test_dashboard_funnel_live_counts_open_stages_and_period_scopes_termin
     stage_b = await make_deal_stage(company_id=stage_a.company_id, name="Qualified to Buy", sort_order=1)
     won_stage = await make_deal_stage(company_id=stage_a.company_id, name="Closed Won", sort_order=5)
 
-    # Open stages: a live count, period ignored — one of these is deliberately
-    # backdated to prove it still counts (no date filter applies to open stages).
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_a.id)
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_a.id, created_at=datetime(2020, 1, 1))
-    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_b.id)
+    # Open stage: period-scoped like any other -- entered this month counts,
+    # entered back in 2020 (and never moved since) does not.
+    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_a.id, with_history=True)
+    await make_deal(
+        account_id=account.id, owner_id=user.id, stage_id=stage_a.id, with_history=True, created_at=datetime(2020, 1, 1)
+    )
+    await make_deal(account_id=account.id, owner_id=user.id, stage_id=stage_b.id, with_history=True)
 
     # Terminal stage: period-scoped by when the deal entered it, same as
     # deals_closed — the 2020 win must not count in this month's Closed Won bar.
@@ -220,7 +228,7 @@ async def test_dashboard_funnel_live_counts_open_stages_and_period_scopes_termin
         if s["stage_name"] in {"Received Requirements", "Qualified to Buy", "Closed Won"}
     ]
     assert stages == [
-        {"stage_name": "Received Requirements", "count": 2},
+        {"stage_name": "Received Requirements", "count": 1},
         {"stage_name": "Qualified to Buy", "count": 1},
         {"stage_name": "Closed Won", "count": 1},
     ]
@@ -250,11 +258,9 @@ async def test_dashboard_deal_distribution_groups_by_tier_within_period(
     await make_deal(
         account_id=account.id, owner_id=user.id, stage_id=stage.id, tier=LeadTier.SILVER, value=200, with_history=True
     )
-    # Entered its (only) stage in 2020 -- outside the current-month window, but
-    # "Evaluation" is a non-terminal (open) stage, so it still counts here --
-    # same rule as the Pipeline Funnel: an open stage counts every deal
-    # currently sitting there regardless of period, only Closed Won/Lost/Cold
-    # are period-scoped.
+    # Entered its (only) stage in 2020 -- outside the current-month window,
+    # so it must NOT count here, same rule as the Pipeline Funnel: every
+    # stage, open or terminal, is scoped by when the deal entered it.
     await make_deal(
         account_id=account.id,
         owner_id=user.id,
@@ -270,7 +276,7 @@ async def test_dashboard_deal_distribution_groups_by_tier_within_period(
     assert response.status_code == 200
     entries = {e["tier"]: e for e in response.json()["deal_distribution"]["entries"]}
     assert entries["gold"] == {"tier": "gold", "count": 2, "total_value": 1500.0}
-    assert entries["silver"] == {"tier": "silver", "count": 2, "total_value": 1199.0}
+    assert entries["silver"] == {"tier": "silver", "count": 1, "total_value": 200.0}
 
 
 async def test_dashboard_deal_distribution_excludes_terminal_stage_deal_outside_period(
@@ -459,11 +465,16 @@ async def test_dashboard_deals_closed_drill_down_excludes_lost_and_cold_deals(
 ):
     """The tile only counts Closed Won (dashboard_service._count_deals_closed).
 
-    date_field=closed_at alone -- no stage_id needed -- has to carry that same
-    Closed-Won-only meaning, since that's the drill-down the dashboard's "Deals
-    Closed" tile actually links to. It used to fall back to "any terminal stage"
-    (Closed Won, Closed Lost, or cold), which folded lost/cold deals closed in
-    the same period into a tile-labelled drill-down that never counted them.
+    A drill-down matching exactly what the tile counted passes
+    `stage_id=<closed won stage id>` explicitly alongside `date_field=closed_at`
+    (same pattern as test_dashboard_deals_closed_tile_matches_deals_list_closed_at_drill_down
+    above) rather than relying on "closed_at + no stage_id" being silently
+    inferred as Closed-Won-only -- that inference used to collide with the
+    plain on-page Deals date-range filter, which also omits stage_id but means
+    "every stage" (see
+    test_list_deals_closed_at_without_stage_id_still_includes_open_stage_deals
+    in test_deals.py), so a normal date-range browse on the Deals page could
+    silently narrow to Closed Won only and hide every open-stage deal.
     """
     from datetime import date, datetime
 
@@ -487,7 +498,7 @@ async def test_dashboard_deals_closed_drill_down_excludes_lost_and_cold_deals(
 
     today = date.today()
     drill_down = await client.get(
-        f"/api/v1/deals?view=list&date_field=closed_at"
+        f"/api/v1/deals?view=list&date_field=closed_at&stage_id={won_stage.id}"
         f"&date_from={today.replace(day=1)}&date_to={today}",
         headers=headers,
     )

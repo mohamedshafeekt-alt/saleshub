@@ -440,10 +440,11 @@ async def make_deal(db_session: AsyncSession, make_deal_stage):
 
         if with_history:
             # Mirror create_deal's initial from_stage=None row, dated to match the
-            # deal itself. Needed by anything that reconstructs a deal's stage at a
-            # past date (dashboard_service.stage_as_of): without it there is no
-            # record of where the deal started. Off by default so the tests that
-            # assert on stage-history row counts only see rows they wrote.
+            # deal itself. Needed by anything relying on entered_current_stage_in
+            # (deal_stage_history) to find when the deal entered its stage: without
+            # it there's no history row recording that at all. Off by default so
+            # the tests that assert on stage-history row counts only see rows they
+            # wrote.
             db_session.add(
                 DealStageHistory(
                     deal_id=deal.id,
