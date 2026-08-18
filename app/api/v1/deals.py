@@ -157,19 +157,20 @@ async def list_deals_route(
         "created_at",
         description=(
             "Which timestamp date_from/date_to filter on. 'created_at' = when the deal was "
-            "opened. 'closed_at' = when it entered its current terminal stage (Closed Won / "
-            "Closed Lost / cold), the same lens the dashboard's Deals Closed tile and funnel "
-            "bars use — combine with stage_id to drill down into a tile. Both bounds inclusive."
+            "opened. 'closed_at' = when it entered its CURRENT stage, open or terminal -- the "
+            "same lens every dashboard widget (tiles, funnel, distribution) uses — combine with "
+            "stage_id to drill down into a tile. Both bounds inclusive."
         ),
     ),
     stage_state: Literal["all", "open", "closed"] = Query(
         "all",
         description=(
             "Filter by whether the deal is still in the pipeline. 'open' excludes Closed Won, "
-            "Closed Lost and cold stages — pass it with no date filter to get the dashboard's "
-            "Deals in Pipeline tile. 'closed' is the inverse. Server-side because DealStage only "
-            "exposes is_cold, so a client filtering by stage_id would have to hardcode the "
-            "Closed Won / Closed Lost names itself."
+            "Closed Lost and cold stages — combine with date_field=closed_at and matching "
+            "date_from/date_to to get the dashboard's Deals in Pipeline tile for that period. "
+            "'closed' is the inverse. Server-side because DealStage only exposes is_cold, so a "
+            "client filtering by stage_id would have to hardcode the Closed Won / Closed Lost "
+            "names itself."
         ),
     ),
     sort_by: Literal["value", "expected_close_date", "created_at"] = Query("created_at"),
@@ -182,12 +183,6 @@ async def list_deals_route(
 ) -> DealsListResponse | StreamingResponse:
     if date_from is not None and date_to is not None and date_to < date_from:
         raise HTTPException(status_code=422, detail="date_to must not be before date_from")
-    # No deal is both open and closed, so this would silently return an empty list
-    # that reads like a bug. Reject it instead.
-    if date_field == "closed_at" and stage_state == "open":
-        raise HTTPException(
-            status_code=422, detail="date_field='closed_at' cannot be combined with stage_state='open'"
-        )
     if to_export:
         rows = await export_deals(
             db,

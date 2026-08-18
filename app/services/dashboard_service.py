@@ -5,7 +5,7 @@ raising, since an empty dashboard is a valid state."""
 from datetime import date, timedelta
 from typing import Literal
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -19,7 +19,7 @@ from app.models.deal_stage import (
     DealStage,
     is_terminal_stage,
 )
-from app.models.deal_stage_history import DealStageHistory, entered_current_stage_in, stage_as_of
+from app.models.deal_stage_history import DealStageHistory, entered_current_stage_in
 from app.models.lead import Lead
 from app.models.lead_activity import LeadActivity
 from app.models.user import User
@@ -55,9 +55,9 @@ def _period_bounds(
             raise ValueError("end_date must not be before start_date")
         start, end = start_date, end_date
     elif period == "this_week":
-        start, end = today - timedelta(days=today.weekday()), today
+        start, end = today - timedelta(days=6), today
     else:
-        start, end = today.replace(day=1), today
+        start, end = today - timedelta(days=29), today
     length = (end - start).days + 1
     prev_end = start - timedelta(days=1)
     prev_start = prev_end - timedelta(days=length - 1)
@@ -99,37 +99,29 @@ async def _count_leads_converted(db: AsyncSession, lo: date, hi: date) -> int:
     return result.scalar_one()
 
 
-async def _count_deals_in_pipeline(db: AsyncSession, as_of: date) -> int:
-    """Deals still open at the end of `as_of` — a snapshot, not a period count.
-
-    Reconstructed from stage history (`stage_as_of`) rather than read off
-    Deal.stage_id, so a past period reports the pipeline as it actually stood:
-    a deal that closed after `as_of` was open then and has to count. Deals with
-    no history row at all fall back to their current stage instead of vanishing.
-    """
-    stage_then = stage_as_of(as_of)
+async def _count_deals_in_pipeline(db: AsyncSession, lo: date, hi: date) -> int:
+    """Deals in a non-terminal stage that entered it within [lo, hi] --
+    entered_current_stage_in, the same date-scoping rule every widget uses,
+    so this always matches the funnel's open-stage bars and GET
+    /deals?stage_state=open&date_field=closed_at for the same range."""
     result = await db.execute(
         select(func.count(Deal.id))
-        .join(stage_then, stage_then.c.deal_id == Deal.id, isouter=True)
-        .join(DealStage, DealStage.id == func.coalesce(stage_then.c.stage_id, Deal.stage_id))
-        .where(
-            ~is_terminal_stage(),
-            # A deal created after the snapshot didn't exist yet; without this
-            # the coalesce fallback above would count it at its current stage.
-            Deal.created_at < as_of + timedelta(days=1),
-        )
+        .join(DealStage, Deal.stage_id == DealStage.id)
+        .where(~is_terminal_stage(), entered_current_stage_in(lo, hi))
     )
     return result.scalar_one()
 
 
 async def _count_deals_closed(db: AsyncSession, lo: date, hi: date) -> int:
+    """Deals whose LIVE current stage is Closed Won, entered within [lo, hi]
+    -- entered_current_stage_in is the single date-scoping rule every
+    dashboard widget and the deals list's `date_field=closed_at` filter share,
+    so this always agrees with the Closed Won funnel bar and the drill-down
+    list for the same range."""
     result = await db.execute(
         select(func.count(Deal.id))
         .join(DealStage, Deal.stage_id == DealStage.id)
-        .where(
-            DealStage.name == CLOSED_WON_STAGE_NAME,
-            entered_current_stage_in(lo, hi),
-        )
+        .where(DealStage.name == CLOSED_WON_STAGE_NAME, entered_current_stage_in(lo, hi))
     )
     return result.scalar_one()
 
@@ -158,10 +150,8 @@ async def get_summary(
     leads_prev = await _count_leads(db, prev_start, prev_end)
     qualified_now = await _count_leads_converted(db, start, end)
     qualified_prev = await _count_leads_converted(db, prev_start, prev_end)
-    # Snapshot tiles take a single as-of date, not a range: "how big was the
-    # pipeline at the end of this period" vs "...at the end of the last one".
-    pipeline_now = await _count_deals_in_pipeline(db, end)
-    pipeline_prev = await _count_deals_in_pipeline(db, prev_end)
+    pipeline_now = await _count_deals_in_pipeline(db, start, end)
+    pipeline_prev = await _count_deals_in_pipeline(db, prev_start, prev_end)
     closed_now = await _count_deals_closed(db, start, end)
     closed_prev = await _count_deals_closed(db, prev_start, prev_end)
     accounts_now = await _count_accounts(db, start, end)
@@ -183,17 +173,13 @@ async def get_funnel(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> FunnelResponse:
-    # Open stages: live count of deals CURRENTLY sitting there, period
-    # ignored — "how many deals are in Evaluation right now", not "how many
-    # entered Evaluation this period" (which double-counted a deal that
-    # bounces through the same stage more than once in a window).
-    # Terminal stages (Closed Won/Lost/Cold): period-scoped by when the deal
-    # entered that stage, the same predicate _count_deals_closed and
-    # get_leaderboard use — so the Closed Won bar always matches the Deals
-    # Closed tile, and both match GET /deals?date_field=closed_at.
+    # Every stage, open or terminal, is scoped by entered_current_stage_in --
+    # when the deal entered its current stage -- the single date-scoping rule
+    # every dashboard widget and GET /deals?date_field=closed_at share, so
+    # each bar always matches the Deals list and the other widgets.
     today = date.today()
     start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
-    in_scope = or_(~is_terminal_stage(), entered_current_stage_in(start, end))
+    in_scope = entered_current_stage_in(start, end)
     result = await db.execute(
         select(DealStage.name, func.count(Deal.id))
         .select_from(DealStage)
@@ -213,16 +199,10 @@ async def get_deal_distribution(
     start_date: date | None = None,
     end_date: date | None = None,
 ) -> DealDistributionResponse:
-    # Same scoping as get_funnel: an open (non-terminal) stage counts every
-    # deal CURRENTLY sitting there regardless of period -- only terminal
-    # stages (Closed Won/Lost/Cold) are scoped by when the deal entered that
-    # stage. Was `entered_current_stage_in` alone, which silently dropped any
-    # open deal that hadn't changed stage within the period -- the funnel and
-    # the Deals list both counted it, but this donut didn't, so the same
-    # range showed 3 deals everywhere except here.
+    # Same scoping as get_funnel: entered_current_stage_in, for every stage.
     today = date.today()
     start, end, _, _ = _period_bounds(period, today, start_date=start_date, end_date=end_date)
-    in_scope = or_(~is_terminal_stage(), entered_current_stage_in(start, end))
+    in_scope = entered_current_stage_in(start, end)
     result = await db.execute(
         select(Deal.tier, func.count(Deal.id), func.coalesce(func.sum(Deal.value), 0))
         .join(DealStage, Deal.stage_id == DealStage.id)

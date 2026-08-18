@@ -293,16 +293,14 @@ async def test_list_deals_date_to_includes_deals_created_on_the_end_date(
     assert [item["id"] for item in response.json()["items"]] == [on_end_date.id]
 
 
-async def test_list_deals_closed_at_filters_terminal_stages_by_entry_and_leaves_open_stages_unscoped(
+async def test_list_deals_closed_at_dates_every_stage_by_when_it_entered_it(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change
 ):
-    """date_field=closed_at dates a TERMINAL deal by when it entered that stage —
-    the lens the dashboard's Deals Closed tile counts with. An open-stage deal is
-    left unscoped by the date range instead of dropping out entirely, matching
-    dashboard_service.get_funnel's open-stage bars, which are a live count
-    regardless of period -- without this, a deal sitting in e.g. Evaluation
-    disappeared from a date-filtered deals list while the funnel still counted
-    it for that same range, so the two disagreed on open-stage counts."""
+    """date_field=closed_at dates EVERY deal -- open or terminal -- by when it
+    entered its current stage, the same lens every dashboard widget uses. An
+    open-stage deal that hasn't moved within the window is excluded here too,
+    same as a terminal one, so this list agrees with the dashboard for any
+    range."""
     from datetime import datetime
 
     rep = await make_user(email="rep-closed-at@example.com", role=UserRole.SALES_REP)
@@ -316,17 +314,22 @@ async def test_list_deals_closed_at_filters_terminal_stages_by_entry_and_leaves_
         stage_id=open_stage.id, created_at=datetime(2020, 1, 1),
     )
     await make_stage_change(closed_in_window, to_stage_id=won_stage.id, at=datetime(2026, 8, 5, 12, 0))
-    # Terminal, but closed OUTSIDE the window -- still excluded; only open stages
-    # skip date-scoping, not terminal ones just because they're not Closed Won.
+    # Terminal, but closed OUTSIDE the window -- excluded.
     closed_later = await make_deal(
         account_id=account.id, owner_id=rep.id, deal_name="New Deal Later Win",
         stage_id=open_stage.id, created_at=datetime(2026, 8, 3, 9, 0),
     )
     await make_stage_change(closed_later, to_stage_id=won_stage.id, at=datetime(2026, 9, 5, 12, 0))
-    # Open stage, never closed -- included regardless of date, live-snapshot rule.
-    still_open = await make_deal(
-        account_id=account.id, owner_id=rep.id, deal_name="Still Open",
-        stage_id=open_stage.id, created_at=datetime(2026, 8, 4, 9, 0),
+    # Open stage, entered it INSIDE the window -- included under closed_at too.
+    still_open_in_window = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Still Open In Window",
+        stage_id=open_stage.id, with_history=True, created_at=datetime(2026, 8, 4, 9, 0),
+    )
+    # Open stage, entered it back in 2020 and never moved since -- excluded,
+    # same as it would be from the funnel/tiles for this range.
+    await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Still Open Stale",
+        stage_id=open_stage.id, with_history=True, created_at=datetime(2020, 1, 1),
     )
     headers = auth_headers(rep)
     window = {"date_from": "2026-08-01", "date_to": "2026-08-31"}
@@ -342,10 +345,54 @@ async def test_list_deals_closed_at_filters_terminal_stages_by_entry_and_leaves_
     created = await client.get(DEALS_URL, params=window, headers=headers)
 
     assert closed.status_code == 200
-    assert {item["id"] for item in closed.json()["items"]} == {closed_in_window.id, still_open.id}
+    assert {item["id"] for item in closed.json()["items"]} == {closed_in_window.id, still_open_in_window.id}
     # Same range, other lens: the two genuinely answer different questions.
     assert created.status_code == 200
-    assert {item["id"] for item in created.json()["items"]} == {closed_later.id, still_open.id}
+    assert {item["id"] for item in created.json()["items"]} == {closed_later.id, still_open_in_window.id}
+
+
+async def test_list_deals_closed_at_without_stage_id_still_scopes_open_stage_deals(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change
+):
+    """A `date_field=closed_at` request with NO `stage_id` at all -- e.g. the
+    Deals page's very first request, fired before its own defensive "select
+    every stage" filter lands -- must not silently narrow to Closed Won only,
+    and must scope an open-stage deal by when it entered that stage, same as
+    a terminal one."""
+    from datetime import datetime
+
+    rep = await make_user(email="rep-closed-at-no-stage@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="NoStageIdCo")
+    open_stage = await make_deal_stage(name="Contracts", sort_order=4)
+    won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
+
+    # Entered Contracts within the window -- included.
+    entered_in_window = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Entered Contracts In Window",
+        stage_id=open_stage.id, with_history=True, created_at=datetime(2026, 7, 10),
+    )
+    # Entered Contracts back in 2020, never moved since -- excluded. Proves
+    # the "no stage_id" path scopes open stages instead of silently narrowing
+    # to Closed Won only (which would also exclude it, but for the wrong reason).
+    await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Entered Contracts Stale",
+        stage_id=open_stage.id, with_history=True, created_at=datetime(2020, 1, 1),
+    )
+    won_in_window = await make_deal(
+        account_id=account.id, owner_id=rep.id, deal_name="Won In Window",
+        stage_id=open_stage.id, created_at=datetime(2026, 7, 1),
+    )
+    await make_stage_change(won_in_window, to_stage_id=won_stage.id, at=datetime(2026, 7, 15))
+
+    headers = auth_headers(rep)
+    response = await client.get(
+        DEALS_URL,
+        params={"date_field": "closed_at", "date_from": "2026-07-01", "date_to": "2026-07-31"},
+        headers=headers,
+    )
+
+    assert response.status_code == 200
+    assert {item["id"] for item in response.json()["items"]} == {entered_in_window.id, won_in_window.id}
 
 
 async def test_list_deals_stage_id_is_repeatable(
@@ -404,28 +451,26 @@ async def test_list_deals_stage_state_open_excludes_won_lost_and_cold(
     assert everything.json()["total"] == 4
 
 
-async def test_list_deals_stage_state_open_matches_deals_in_pipeline_tile(
+async def test_list_deals_stage_state_open_with_closed_at_matches_deals_in_pipeline_tile(
     client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage, make_stage_change
 ):
-    """Clicking Deals in Pipeline has to land on exactly the deals it counted.
-
-    Mirrors the Deals Closed drill-down contract. Only asserted for the current
-    period: for a past custom range the tile reconstructs each deal's stage as of
-    the period end, which stage_state=open (a right-now filter) cannot reproduce.
-    """
-    from datetime import datetime
+    """Clicking Deals in Pipeline for a period has to land on exactly the
+    deals it counted. The tile is now period-scoped by when a deal entered
+    its stage, same as every other widget -- so the drill-down needs the
+    same date_field=closed_at + date range the tile itself used, not just
+    stage_state=open alone (which is unscoped, live)."""
+    from datetime import date, datetime
 
     manager = await make_user(email="mgr-pipeline-drill@example.com", role=UserRole.SALES_MANAGER)
     account = await make_account(owner_id=manager.id, company="PipelineDrillCo")
     open_stage = await make_deal_stage(name="Evaluation", sort_order=1)
     won_stage = await make_deal_stage(company_id=open_stage.company_id, name="Closed Won", sort_order=5)
 
-    # Two open, one of them opened long before the period — the tile is a snapshot,
-    # so an old-but-open deal still counts and the drill-down must include it.
-    await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id)
-    await make_deal(
-        account_id=account.id, owner_id=manager.id, stage_id=open_stage.id, created_at=datetime(2020, 1, 1)
-    )
+    # Entered its open stage Monthly -- counts.
+    await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id, with_history=True)
+    # Entered its open stage long before this period -- excluded from both sides.
+    stale = await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id)
+    await make_stage_change(stale, to_stage_id=open_stage.id, at=datetime(2020, 1, 1))
     # Closed this period — out of the pipeline on both sides.
     closed = await make_deal(account_id=account.id, owner_id=manager.id, stage_id=open_stage.id)
     await make_stage_change(closed, to_stage_id=won_stage.id, at=datetime.now())
@@ -435,26 +480,18 @@ async def test_list_deals_stage_state_open_matches_deals_in_pipeline_tile(
     assert dashboard.status_code == 200
     tile = dashboard.json()["summary"]["deals_in_pipeline"]["value"]
 
-    drill_down = await client.get(DEALS_URL, params={"stage_state": "open"}, headers=headers)
+    today = date.today()
+    window = {
+        "date_field": "closed_at",
+        "stage_state": "open",
+        "date_from": today.replace(day=1).isoformat(),
+        "date_to": today.isoformat(),
+    }
+    drill_down = await client.get(DEALS_URL, params=window, headers=headers)
 
     assert drill_down.status_code == 200
-    assert tile == 2
+    assert tile == 1
     assert drill_down.json()["total"] == tile
-
-
-async def test_list_deals_rejects_closed_at_combined_with_stage_state_open(
-    client: AsyncClient, make_user, auth_headers
-):
-    """No deal is both open and closed — reject rather than return a confusing
-    empty list."""
-    rep = await make_user(email="rep-contradiction@example.com", role=UserRole.SALES_REP)
-    headers = auth_headers(rep)
-
-    response = await client.get(
-        DEALS_URL, params={"date_field": "closed_at", "stage_state": "open"}, headers=headers
-    )
-
-    assert response.status_code == 422
 
 
 async def test_list_deals_sales_rep_only_sees_own_deals(

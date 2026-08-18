@@ -4,7 +4,7 @@ Also the source of truth for *when* a deal closed. `Deal.updated_at` is not --
 `Base.updated_at` carries `onupdate=func.now()`, so renaming a deal or editing
 its value bumps it, which would drag a long-closed deal into the current
 period's numbers and quietly drop it out of the period it actually closed in.
-The predicates below read the real transition timestamp instead, and are shared
+The predicate below reads the real transition timestamp instead, and is shared
 by the dashboard tiles and the deals-list `date_field=closed_at` filter so both
 answer the same question.
 """
@@ -12,7 +12,7 @@ answer the same question.
 from datetime import date, datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import ColumnElement, ForeignKey, Subquery, and_, func, select
+from sqlalchemy import ColumnElement, ForeignKey, and_, func, select
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base
@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from app.models.deal_stage import DealStage
     from app.models.user import User
 
-__all__ = ["DealStageHistory", "entered_current_stage_in", "stage_as_of"]
+__all__ = ["DealStageHistory", "entered_current_stage_in"]
 
 
 class DealStageHistory(Base):
@@ -82,11 +82,19 @@ def entered_current_stage_in(lo: date | None, hi: date | None) -> ColumnElement[
     Closed Won funnel bar and the `date_field=closed_at` drill-down agree by
     construction whatever the deal's history looks like.
 
+    This is the single date-scoping rule shared by every dashboard widget and
+    the deals list's `date_field=closed_at` filter (see dashboard_service and
+    deal_service) -- always anchored to the deal's CURRENT live stage, never a
+    reconstructed past one. That keeps every widget and the list trivially
+    consistent with each other by construction: same predicate, same inputs,
+    same answer, everywhere it's used, for any period.
+
     ponytail: anchored to the deal's *current* stage, so re-opening a deal removes
     it from the period it closed in, and re-winning it moves it to the newer
-    period rather than leaving it in both. Swap for a plain "entered stage X, ever"
-    event count if immutable historical close numbers (commission runs) ever
-    matter more than tile/list agreement.
+    period rather than leaving it in both; a past period's own report can also
+    change retroactively if a deal it counted moves again later. Swap for a
+    stage-as-of-period-end reconstruction if either of those starts mattering
+    more than every widget agreeing with every other one.
 
     A deal with no recorded transition into its current stage is never matched
     (NULL comparisons are never true) -- same as before.
@@ -100,28 +108,3 @@ def entered_current_stage_in(lo: date | None, hi: date | None) -> ColumnElement[
     if not conditions:
         return latest.is_not(None)
     return and_(*conditions)
-
-
-def stage_as_of(as_of: date) -> Subquery:
-    """Subquery of (deal_id, stage_id) giving each deal's stage as of the end of
-    `as_of`, taken from its latest transition at or before then.
-
-    Lets a past period be reported as it actually stood rather than projecting
-    today's stages backwards -- a deal that closed *after* `as_of` was still
-    open then, and a period's pipeline count has to say so.
-    """
-    ranked = (
-        select(
-            DealStageHistory.deal_id,
-            DealStageHistory.to_stage_id.label("stage_id"),
-            func.row_number()
-            .over(
-                partition_by=DealStageHistory.deal_id,
-                order_by=(DealStageHistory.created_at.desc(), DealStageHistory.id.desc()),
-            )
-            .label("rn"),
-        )
-        .where(DealStageHistory.created_at < as_of + timedelta(days=1))
-        .subquery()
-    )
-    return select(ranked.c.deal_id, ranked.c.stage_id).where(ranked.c.rn == 1).subquery()
