@@ -35,6 +35,7 @@ from app.services.lead_activity_service import (
     update_lead_activity,
 )
 from app.services.lead_service import (
+    DuplicateLeadContactError,
     DuplicateLeadEmailError,
     LeadAccessForbiddenError,
     LeadNotFoundError,
@@ -75,6 +76,8 @@ async def upsert_lead_route(
     except LeadAccessForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except DuplicateLeadEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DuplicateLeadContactError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     await db.commit()

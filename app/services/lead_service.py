@@ -20,7 +20,7 @@ from app.models.permission import Permission
 from app.models.role import Role
 from app.models.role_permission import role_permissions
 from app.models.user import User
-from app.schemas.lead import LeadUpsert
+from app.schemas.lead import LeadContactInput, LeadUpsert
 from app.services.email.sender import EmailSender
 from app.services.email.templates import send_new_lead_notification_email
 from app.services.notification_service import create_notification
@@ -39,12 +39,45 @@ class LeadAccessForbiddenError(Exception):
     """Raised when a Sales Rep tries to access a lead they don't own."""
 
 
+class DuplicateLeadContactError(Exception):
+    """Raised when two contacts on the same lead -- its own primary email/
+    phone plus any additional ones -- would share an email or a phone.
+    Scoped to one lead: a phone/email already used on a *different* lead's
+    contact is a separate concern (email already enforced DB-wide via
+    ix_lead_contacts_email/DuplicateLeadEmailError; phone has no such
+    cross-lead check)."""
+
+
 def _is_duplicate_email_violation(exc: IntegrityError) -> bool:
     # ix_leads_email guards the lead's own email; ix_lead_contacts_email
     # guards its additional contacts (LeadContact rows added below). Any
     # other IntegrityError (e.g. a bad owner_id FK) is a different failure
     # and must not be reported as a duplicate email.
     return "ix_leads_email" in str(exc.orig) or "ix_lead_contacts_email" in str(exc.orig)
+
+
+def _assert_contacts_are_distinct(
+    primary_email: str | None, primary_phone: str | None, contacts: list[LeadContactInput]
+) -> None:
+    """Every contact point on one lead -- its own primary email/phone plus
+    each additional contact -- must be distinct from every other one on that
+    same lead. email/phone are already schema-normalized (EmailStr lowercases
+    the domain; validate_phone strips formatting), so a plain stripped/
+    lowercased equality check is enough."""
+    seen_emails = {primary_email.strip().lower()} if primary_email else set()
+    seen_phones = {primary_phone.strip()} if primary_phone else set()
+
+    for contact in contacts:
+        email = (contact.email or "").strip().lower()
+        phone = (contact.phone or "").strip()
+        if email:
+            if email in seen_emails:
+                raise DuplicateLeadContactError(f"Duplicate contact email on this lead: {contact.email}")
+            seen_emails.add(email)
+        if phone:
+            if phone in seen_phones:
+                raise DuplicateLeadContactError(f"Duplicate contact phone on this lead: {contact.phone}")
+            seen_phones.add(phone)
 
 
 async def _send_new_lead_email_safe(email_sender: EmailSender, to: str, lead_name: str, company: str) -> None:
@@ -61,6 +94,8 @@ async def create_lead(
     requester: User,
     background_tasks: BackgroundTasks | None = None,
 ) -> Lead:
+    _assert_contacts_are_distinct(data.email, data.phone, data.contacts)
+
     lead_data = data.model_dump(exclude={"id", "contacts"})
     lead_data["status"] = lead_data["status"] or LeadStatus.NOT_CONTACTED
     lead_data["is_favourite"] = lead_data["is_favourite"] or False
@@ -302,10 +337,55 @@ async def get_lead_detail(db: AsyncSession, lead_id: int, requester: User) -> Le
     return lead
 
 
+async def _replace_additional_lead_contacts(
+    db: AsyncSession, lead: Lead, contacts: list[LeadContactInput]
+) -> None:
+    """`contacts` is the full desired additional-contacts set, not a delta --
+    the edit form always resends existing + newly added ones together (same
+    shape as deal_service._set_deal_contacts's contact_ids). Deletes every
+    lead_contacts row for this lead except the one mirroring its own primary
+    email/phone (the row create_lead inserts alongside any extras), then
+    inserts `contacts` fresh."""
+    primary_email = (lead.email or "").strip().lower()
+    primary_phone = (lead.phone or "").strip()
+
+    result = await db.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
+    for row in result.scalars():
+        email = (row.email or "").strip()
+        phone = (row.phone or "").strip()
+        is_primary_mirror = (email and email.lower() == primary_email) or (
+            not email and phone and phone == primary_phone
+        )
+        if not is_primary_mirror:
+            await db.delete(row)
+    await db.flush()  # the deletes must land before the inserts below, in case an
+    # unchanged contact's email is being deleted and re-inserted in the same call --
+    # flush() ordering across unrelated rows in one table isn't otherwise guaranteed.
+
+    for contact in contacts:
+        db.add(
+            LeadContact(
+                lead_id=lead.id,
+                first_name=contact.first_name,
+                last_name=contact.last_name,
+                email=contact.email,
+                phone=contact.phone,
+            )
+        )
+
+
 async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requester: User) -> Lead:
     lead = await _get_lead_or_raise(db, lead_id, requester)
     old_owner_id = lead.owner_id
     old_is_favourite = lead.is_favourite
+
+    if "contacts" in data.model_fields_set:
+        # Checked against the *effective* primary -- if this same request is
+        # also changing email/phone, validate against the new value, not the
+        # one about to be overwritten.
+        effective_email = data.email if "email" in data.model_fields_set else lead.email
+        effective_phone = data.phone if "phone" in data.model_fields_set else lead.phone
+        _assert_contacts_are_distinct(effective_email, effective_phone, data.contacts)
 
     updates = data.model_dump(exclude_unset=True, exclude={"id", "contacts"})
     for field, value in updates.items():
@@ -318,6 +398,23 @@ async def update_lead(db: AsyncSession, lead_id: int, data: LeadUpsert, requeste
         if _is_duplicate_email_violation(exc):
             raise DuplicateLeadEmailError(f"Email already exists: {data.email}") from exc
         raise
+
+    # "contacts" was excluded from `updates` above (a list can't go through
+    # setattr like a scalar field), so unlike every other field it never got
+    # synced regardless of whether the caller sent it -- checked via
+    # model_fields_set, not `data.contacts` directly, because that field
+    # defaults to `[]`: a payload that omits "contacts" entirely (e.g. the
+    # favourite-star toggle, which only ever sends {id, is_favourite}) must
+    # leave existing contacts alone rather than reading as "clear them all".
+    if "contacts" in data.model_fields_set:
+        await _replace_additional_lead_contacts(db, lead, data.contacts)
+        try:
+            await db.flush()
+        except IntegrityError as exc:
+            await db.rollback()
+            if _is_duplicate_email_violation(exc):
+                raise DuplicateLeadEmailError(f"Email already exists: {data.email}") from exc
+            raise
 
     if "owner_id" in updates and updates["owner_id"] is not None and updates["owner_id"] != old_owner_id:
         lead_name = lead.name
