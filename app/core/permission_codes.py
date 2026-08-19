@@ -17,6 +17,7 @@ DEALS_ACCESS = "deals.access"
 DEALS_VIEW_ALL = "deals.view_all"
 DEALS_DELETE_ANY_ACTIVITY = "deals.delete_any_activity"
 CONTACTS_ACCESS = "contacts.access"
+CONTACTS_VIEW_ALL = "contacts.view_all"
 AUDIT_LOG_VIEW = "audit_log.view"
 DASHBOARD_VIEW = "dashboard.view"
 
@@ -29,4 +30,5 @@ PERMISSION_DEPENDENCIES: dict[str, str] = {
     LEADS_VIEW_ALL: LEADS_ACCESS,
     ACCOUNTS_VIEW_ALL: ACCOUNTS_ACCESS,
     DEALS_VIEW_ALL: DEALS_ACCESS,
+    CONTACTS_VIEW_ALL: CONTACTS_ACCESS,
 }

@@ -1,7 +1,9 @@
-"""Standalone Contact CRUD -- role-gated only (Contact has no owner_id and
-no single owning account; see contact_service.py's module docstring). Use
-POST/PUT /accounts/{account_id}/contacts (app/api/v1/accounts.py) to create
-or update a contact together with its account link and is_primary flag."""
+"""Standalone Contact CRUD -- see contact_service.py's module docstring for
+the visibility rule (Contact has no owner_id and no single owning account,
+so scoping is via linked Account/Deal ownership, or the creator for an
+unlinked contact). Use POST/PUT /accounts/{account_id}/contacts
+(app/api/v1/accounts.py) to create or update a contact together with its
+account link and is_primary flag."""
 
 from datetime import date
 from typing import Literal
@@ -34,6 +36,7 @@ from app.services.contact_import_service import (
     import_contacts,
 )
 from app.services.contact_service import (
+    ContactAccessForbiddenError,
     ContactNotFoundError,
     DuplicateContactEmailError,
     create_contact,
@@ -120,6 +123,7 @@ async def list_contacts_route(
     limit: int = Query(20),
     offset: int = Query(0),
     to_export: bool = Query(False),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Page[ContactListItemRead] | StreamingResponse:
     if date_from is not None and date_to is not None and date_to < date_from:
@@ -127,6 +131,7 @@ async def list_contacts_route(
     if to_export:
         rows = await export_contacts(
             db,
+            requester=current_user,
             owner_id=owner_id,
             account_id=account_id,
             tier=tier,
@@ -154,6 +159,7 @@ async def list_contacts_route(
 
     items, total = await list_contacts(
         db,
+        requester=current_user,
         owner_id=owner_id,
         account_id=account_id,
         tier=tier,
@@ -206,12 +212,17 @@ async def import_contacts_route(
 @router.get("/{contact_id}/overview", response_model=ContactOverviewRead)
 async def get_contact_overview_route(
     contact_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactOverviewRead:
     try:
-        contact, account_link, deal_count, created_by_name = await get_contact_overview(db, contact_id)
+        contact, account_link, deal_count, created_by_name = await get_contact_overview(
+            db, contact_id, requester=current_user
+        )
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ContactAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     return _to_contact_overview(contact, account_link, deal_count, created_by_name)
 
@@ -219,12 +230,16 @@ async def get_contact_overview_route(
 @router.get("/{contact_id}/deals", response_model=list[DealRead])
 async def list_contact_deals_route(
     contact_id: int,
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> list[DealRead]:
     try:
+        await get_contact(db, contact_id, requester=current_user)  # visibility check
         deals = await list_deals_for_contact(db, contact_id)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ContactAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     return [DealRead.model_validate(deal) for deal in deals]
 
@@ -233,12 +248,15 @@ async def list_contact_deals_route(
 async def get_contact_route(
     contact_id: int,
     to_export: bool = Query(False),
+    current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> ContactRead | StreamingResponse:
     try:
-        contact = await get_contact(db, contact_id)
+        contact = await get_contact(db, contact_id, requester=current_user)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ContactAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     detail = ContactRead.model_validate(contact)
     if not to_export:
@@ -284,6 +302,8 @@ async def update_contact_route(
         contact = await update_contact(db, contact_id, data, requester=current_user)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ContactAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except DuplicateContactEmailError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
@@ -301,6 +321,8 @@ async def delete_contact_route(
         await delete_contact(db, contact_id, requester=current_user)
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ContactAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
 
     await db.commit()
 

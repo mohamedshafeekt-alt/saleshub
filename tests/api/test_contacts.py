@@ -1,11 +1,14 @@
 """HTTP-level contract for /api/v1/contacts.
 
-Standalone Contact CRUD -- role-gated only (401/403 via the router's
-require_role dependency), no ownership scoping (Contact has no owner_id and
-no single owning account -- see contact_service.py's module docstring).
-Covers: 201 create as each allowed role, 422 missing required field, 401 no
-auth, 403 for Delivery SME, 200 successful get/PATCH partial update, 204
-successful DELETE, 404 for a nonexistent contact id.
+Standalone Contact CRUD -- role-gated (401/403 via the router's require_role
+dependency) AND, without contacts.view_all, scoped to contacts linked to an
+Account/Deal the requester owns or one it created itself (see
+contact_service.py's module docstring; the scoping tests themselves live in
+tests/services/test_contact_service.py -- this file covers the HTTP wiring:
+403 vs 404 vs 200). Covers: 201 create as each allowed role, 422 missing
+required field, 401 no auth, 403 for Delivery SME, 200 successful
+get/PATCH partial update, 204 successful DELETE, 404 for a nonexistent
+contact id.
 
 Also covers the Contacts List (GET /contacts, filters + pagination), Contact
 Overview (GET /contacts/{id}/overview), and Contact Deals (GET
@@ -171,6 +174,19 @@ async def test_get_contact_returns_404_for_nonexistent_id(client: AsyncClient, m
     assert response.status_code == 404
 
 
+async def test_get_contact_returns_403_for_non_owning_non_creator(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    owner = await make_user(email="owner-get-403-contact@example.com", role=UserRole.SALES_REP)
+    other = await make_user(email="other-get-403-contact@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Get 403 Co")
+    contact = await make_contact(account_id=account.id, first_name="Not Yours")
+
+    response = await client.get(f"{CONTACTS_URL}/{contact.id}", headers=auth_headers(other))
+
+    assert response.status_code == 403
+
+
 async def test_update_contact_partial_patch_returns_200(
     client: AsyncClient, make_user, auth_headers
 ):
@@ -267,6 +283,21 @@ async def test_list_contacts_route_filters_by_owner_id(
     assert response.status_code == 200
     body = response.json()
     assert [item["id"] for item in body["items"]] == [contact_a.id]
+
+
+async def test_list_contacts_route_hides_others_contacts_without_view_all(
+    client: AsyncClient, make_user, auth_headers, make_account, make_contact
+):
+    owner = await make_user(email="owner-list-hidden-api@example.com", role=UserRole.SALES_REP)
+    other = await make_user(email="other-list-hidden-api@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=owner.id, company="Hidden From Other Co")
+    contact = await make_contact(account_id=account.id, first_name="Hidden")
+
+    response = await client.get(CONTACTS_URL, headers=auth_headers(other))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert all(item["id"] != contact.id for item in body["items"])
 
 
 async def test_list_contacts_route_no_auth_header_returns_401(client: AsyncClient):

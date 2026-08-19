@@ -16,6 +16,7 @@ from app.core.permission_codes import (
     ACCOUNTS_VIEW_ALL,
     AUDIT_LOG_VIEW,
     CONTACTS_ACCESS,
+    CONTACTS_VIEW_ALL,
     DASHBOARD_VIEW,
     DEALS_ACCESS,
     DEALS_DELETE_ANY_ACTIVITY,
@@ -66,6 +67,12 @@ _PERMISSIONS = [
         "Deals",
     ),
     (CONTACTS_ACCESS, "Access Contacts", "View and manage contacts", "Contacts"),
+    (
+        CONTACTS_VIEW_ALL,
+        "View All Contacts",
+        "See all contacts, not just ones tied to your accounts/deals",
+        "Contacts",
+    ),
     (AUDIT_LOG_VIEW, "View Audit Log", "View the system-wide audit log", "Audit Log"),
     (DASHBOARD_VIEW, "View Dashboard", "View the company-wide performance dashboard", "Dashboard"),
 ]
@@ -80,6 +87,7 @@ STARTER_ROLES = {
         DEALS_ACCESS,
         DEALS_VIEW_ALL,
         CONTACTS_ACCESS,
+        CONTACTS_VIEW_ALL,
         USERS_VIEW,
         DASHBOARD_VIEW,
     ],

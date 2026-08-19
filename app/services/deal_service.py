@@ -23,7 +23,7 @@ from app.models.user import User
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountNotFoundError, get_account
 from app.services.audit_service import log_audit
-from app.services.contact_service import ContactNotFoundError, get_contact
+from app.services.contact_service import ContactNotFoundError, contact_exists
 from app.services.notification_service import create_notification
 
 SortBy = Literal["value", "expected_close_date", "created_at"]
@@ -453,10 +453,11 @@ async def list_deals_for_account(db: AsyncSession, account_id: int, requester: U
 
 
 async def list_deals_for_contact(db: AsyncSession, contact_id: int) -> list[Deal]:
-    """Deals the Contact is a stakeholder on, via DealContact -- not
-    ownership-scoped (Contact itself is role-gated only, see
-    contact_service.py's module docstring)."""
-    await get_contact(db, contact_id)
+    """Deals the Contact is a stakeholder on, via DealContact -- not itself
+    deal-ownership-scoped (the route checks the requester can see the
+    Contact at all before calling this; existence-only here, see
+    contact_service.contact_exists)."""
+    await contact_exists(db, contact_id)
 
     result = await db.execute(
         select(Deal).join(DealContact, DealContact.deal_id == Deal.id).where(DealContact.contact_id == contact_id)
