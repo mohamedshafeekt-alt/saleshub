@@ -272,6 +272,50 @@ async def test_create_deal_succeeds_with_closed_lost_stage_and_reason_provided(
     assert deal.cold_reason == "Competitor chosen"
 
 
+async def test_create_deal_notifies_users_with_notify_on_create_permission(
+    db_session: AsyncSession, make_account, make_deal_stage
+):
+    from app.models.notification import Notification
+
+    admin = await _make_user(db_session, "admin-notify-deal@example.com", UserRole.ADMIN)
+    await _make_user(db_session, "rep-not-notified-deal@example.com", UserRole.SALES_REP)
+    account = await make_account(owner_id=admin.id, company="Notify Deal Co")
+    stage = await make_deal_stage(name="Notify Deal Stage")
+
+    data = DealCreate(deal_name="Notify Me", account_id=account.id, owner_id=admin.id, stage_id=stage.id)
+    deal = await create_deal(db_session, data, requester=admin)
+
+    result = await db_session.execute(
+        select(Notification).where(
+            Notification.recipient_id == admin.id, Notification.type == NotificationType.DEAL_CREATED
+        )
+    )
+    notification = result.scalar_one()
+    assert notification.entity_type == "deal"
+    assert notification.entity_id == deal.id
+
+
+async def test_create_deal_does_not_notify_deactivated_or_deleted_admins(
+    db_session: AsyncSession, make_account, make_deal_stage
+):
+    from app.models.notification import Notification
+
+    admin_active = await _make_user(db_session, "admin-active-deal@example.com", UserRole.ADMIN)
+    admin_deactivated = await _make_user(db_session, "admin-deactivated-deal@example.com", UserRole.ADMIN)
+    admin_deactivated.is_active = False
+    await db_session.flush()
+    account = await make_account(owner_id=admin_active.id, company="Notify Deal Inactive Co")
+    stage = await make_deal_stage(name="Notify Deal Inactive Stage")
+
+    data = DealCreate(deal_name="Notify Active Only", account_id=account.id, owner_id=admin_active.id, stage_id=stage.id)
+    await create_deal(db_session, data, requester=admin_active)
+
+    result = await db_session.execute(
+        select(Notification.recipient_id).where(Notification.type == NotificationType.DEAL_CREATED)
+    )
+    assert set(result.scalars().all()) == {admin_active.id}
+
+
 # --- list_deals ----------------------------------------------------------
 
 

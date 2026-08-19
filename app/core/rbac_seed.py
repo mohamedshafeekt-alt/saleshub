@@ -13,6 +13,7 @@ from sqlalchemy.orm import selectinload
 from app.core.permission_codes import (
     ACCOUNTS_ACCESS,
     ACCOUNTS_DELETE_ANY_ACTIVITY,
+    ACCOUNTS_NOTIFY_ON_CREATE,
     ACCOUNTS_VIEW_ALL,
     AUDIT_LOG_VIEW,
     CONTACTS_ACCESS,
@@ -20,6 +21,7 @@ from app.core.permission_codes import (
     DASHBOARD_VIEW,
     DEALS_ACCESS,
     DEALS_DELETE_ANY_ACTIVITY,
+    DEALS_NOTIFY_ON_CREATE,
     DEALS_VIEW_ALL,
     LEADS_ACCESS,
     LEADS_DELETE_ANY_ACTIVITY,
@@ -53,6 +55,12 @@ _PERMISSIONS = [
     (ACCOUNTS_ACCESS, "Access Accounts", "View and manage accounts", "Accounts"),
     (ACCOUNTS_VIEW_ALL, "View All Accounts", "See all accounts, not just owned ones", "Accounts"),
     (
+        ACCOUNTS_NOTIFY_ON_CREATE,
+        "New Account Notifications",
+        "Receive a notification when a new account is created",
+        "Accounts",
+    ),
+    (
         ACCOUNTS_DELETE_ANY_ACTIVITY,
         "Delete Any Account Activity",
         "Delete a logged activity on any account, regardless of ownership",
@@ -60,6 +68,12 @@ _PERMISSIONS = [
     ),
     (DEALS_ACCESS, "Access Deals", "View and manage deals", "Deals"),
     (DEALS_VIEW_ALL, "View All Deals", "See all deals, not just owned ones", "Deals"),
+    (
+        DEALS_NOTIFY_ON_CREATE,
+        "New Deal Notifications",
+        "Receive a notification when a new deal is created",
+        "Deals",
+    ),
     (
         DEALS_DELETE_ANY_ACTIVITY,
         "Delete Any Deal Activity",
@@ -139,3 +153,17 @@ async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, Role]:
     await db.flush()
 
     return roles_by_name
+
+
+async def seed_on_startup() -> None:
+    """Called once from app.main's lifespan on every process start (dev
+    reload, prod deploy). Without this, a permission code newly added to
+    _PERMISSIONS only reaches the database via someone remembering to
+    re-run scripts/seed_admin.py by hand -- easy to forget, and exactly
+    what left deals.notify_on_create/accounts.notify_on_create unseeded
+    (and so silently un-notifiable) after they were added in code."""
+    from app.db.session import async_session_factory
+
+    async with async_session_factory() as db:
+        await seed_permissions_and_roles(db)
+        await db.commit()

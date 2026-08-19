@@ -11,7 +11,7 @@ from typing import Any, Literal
 from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.permission_codes import DEALS_VIEW_ALL
+from app.core.permission_codes import DEALS_NOTIFY_ON_CREATE, DEALS_VIEW_ALL
 from app.models.account import Account
 from app.models.contact import Contact
 from app.models.deal import Deal
@@ -19,6 +19,9 @@ from app.models.deal_contact import DealContact
 from app.models.deal_stage import CLOSED_LOST_STAGE_NAME, DealStage, is_terminal_stage
 from app.models.deal_stage_history import DealStageHistory, entered_current_stage_in
 from app.models.enums import AuditAction, LeadTier, NotificationType
+from app.models.permission import Permission
+from app.models.role import Role
+from app.models.role_permission import role_permissions
 from app.models.user import User
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountNotFoundError, get_account
@@ -148,6 +151,30 @@ async def create_deal(db: AsyncSession, data: DealCreate, requester: User) -> De
         db, table_name="deals", record_id=deal.id, action=AuditAction.CREATED,
         actor_id=requester.id, description=f"Deal '{deal.deal_name}' created",
     )
+
+    result = await db.execute(
+        select(User)
+        .join(Role, User.role_id == Role.id)
+        .join(role_permissions, Role.id == role_permissions.c.role_id)
+        .join(Permission, role_permissions.c.permission_id == Permission.id)
+        .where(
+            Permission.code == DEALS_NOTIFY_ON_CREATE,
+            User.is_active.is_(True),
+            User.is_delete.is_(False),
+        )
+    )
+    for notifiable in result.scalars():
+        await create_notification(
+            db,
+            recipient_id=notifiable.id,
+            type=NotificationType.DEAL_CREATED,
+            title="New deal created",
+            body=f"{deal.deal_name} was just created.",
+            actor_id=requester.id,
+            entity_type="deal",
+            entity_id=deal.id,
+        )
+
     # deal is a freshly-constructed instance, never loaded via a `select(Deal)`
     # -- account/stage/owner (lazy="joined" only applies to query-time loads)
     # are unpopulated relationship attributes. Accessing them later to build

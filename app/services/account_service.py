@@ -8,7 +8,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.permission_codes import ACCOUNTS_VIEW_ALL
+from app.core.permission_codes import ACCOUNTS_NOTIFY_ON_CREATE, ACCOUNTS_VIEW_ALL
 from app.models.account import Account
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
@@ -16,6 +16,9 @@ from app.models.deal import Deal
 from app.models.deal_stage import DealStage
 from app.models.enums import AuditAction, LeadTier, NotificationType
 from app.models.lead_contact import LeadContact
+from app.models.permission import Permission
+from app.models.role import Role
+from app.models.role_permission import role_permissions
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
 from app.services.audit_service import log_audit
@@ -133,6 +136,30 @@ async def create_account(db: AsyncSession, data: AccountCreate, requester: User)
         db, table_name="accounts", record_id=account.id, action=AuditAction.CREATED,
         actor_id=requester.id, description=f"Account '{account.company}' created",
     )
+
+    result = await db.execute(
+        select(User)
+        .join(Role, User.role_id == Role.id)
+        .join(role_permissions, Role.id == role_permissions.c.role_id)
+        .join(Permission, role_permissions.c.permission_id == Permission.id)
+        .where(
+            Permission.code == ACCOUNTS_NOTIFY_ON_CREATE,
+            User.is_active.is_(True),
+            User.is_delete.is_(False),
+        )
+    )
+    for notifiable in result.scalars():
+        await create_notification(
+            db,
+            recipient_id=notifiable.id,
+            type=NotificationType.ACCOUNT_CREATED,
+            title="New account created",
+            body=f"{account.company} was just created.",
+            actor_id=requester.id,
+            entity_type="account",
+            entity_id=account.id,
+        )
+
     return account
 
 
