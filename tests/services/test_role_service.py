@@ -66,7 +66,26 @@ async def test_update_role_replaces_permission_set(db_session: AsyncSession):
     assert [p.code for p in updated.permissions] == ["b.access"]
 
 
-async def test_create_role_with_view_all_auto_grants_access(db_session: AsyncSession):
+async def test_update_role_with_accounts_access_auto_grants_users_view(db_session: AsyncSession):
+    result = await db_session.execute(select(Permission).where(Permission.code == "accounts.access"))
+    accounts_access = result.scalar_one()
+    role = await create_role(db_session, RoleCreate(name="Update Deps Role"))
+
+    updated = await update_role(
+        db_session, role.id, RoleUpdate(name="Update Deps Role", permission_ids=[accounts_access.id])
+    )
+
+    codes = {p.code for p in updated.permissions}
+    assert codes == {"accounts.access", "users.view"}
+
+
+async def test_create_role_with_view_all_auto_grants_access_and_its_own_dependency(
+    db_session: AsyncSession,
+):
+    """Regression test for the non-transitive version of this backfill:
+    requesting only leads.view_all must also pull in users.view (a
+    dependency of leads.access, not of leads.view_all directly) -- not just
+    the one direct dependency a single lookup would find."""
     result = await db_session.execute(select(Permission).where(Permission.code == "leads.view_all"))
     view_all = result.scalar_one()
 
@@ -75,7 +94,19 @@ async def test_create_role_with_view_all_auto_grants_access(db_session: AsyncSes
     )
 
     codes = {p.code for p in role.permissions}
-    assert codes == {"leads.access", "leads.view_all"}
+    assert codes == {"leads.access", "leads.view_all", "users.view"}
+
+
+async def test_create_role_with_deals_access_auto_grants_users_view(db_session: AsyncSession):
+    result = await db_session.execute(select(Permission).where(Permission.code == "deals.access"))
+    deals_access = result.scalar_one()
+
+    role = await create_role(
+        db_session, RoleCreate(name="Deals Only Role", permission_ids=[deals_access.id])
+    )
+
+    codes = {p.code for p in role.permissions}
+    assert codes == {"deals.access", "users.view"}
 
 
 async def test_update_role_missing_id_raises_not_found(db_session: AsyncSession):

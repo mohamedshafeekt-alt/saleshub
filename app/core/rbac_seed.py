@@ -30,6 +30,7 @@ from app.core.permission_codes import (
     ROLES_MANAGE,
     USERS_MANAGE,
     USERS_VIEW,
+    resolve_permission_dependencies,
 )
 from app.models.permission import Permission
 from app.models.role import Role
@@ -150,6 +151,18 @@ async def seed_permissions_and_roles(db: AsyncSession) -> dict[str, Role]:
             for code in codes:
                 if code not in role_codes and code in newly_inserted_codes:
                     role.permissions.append(by_code[code])
+
+    # A PERMISSION_DEPENDENCIES entry added in code (e.g. deals.access ->
+    # users.view) only reaches an *already-existing* role via
+    # role_service._load_permissions the next time someone resaves that role
+    # through /roles -- a custom role built before the dependency existed
+    # (or a starter role from an older version of STARTER_ROLES) stays stuck
+    # missing it otherwise. Runs against every role, every startup.
+    for role in roles_by_name.values():
+        role_codes = {permission.code for permission in role.permissions}
+        for missing_code in resolve_permission_dependencies(role_codes) - role_codes:
+            role.permissions.append(by_code[missing_code])
+
     await db.flush()
 
     return roles_by_name
