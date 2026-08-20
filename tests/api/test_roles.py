@@ -26,7 +26,9 @@ async def test_create_role_as_admin_returns_201(client: AsyncClient, make_user, 
     assert response.status_code == 201
     body = response.json()
     assert body["name"] == "Custom Role"
-    assert body["permissions"][0]["code"] == "leads.access"
+    # leads.access now pulls in users.view too (Owner dropdowns on the Lead
+    # form need GET /users) -- set, not an ordered/indexed check.
+    assert {p["code"] for p in body["permissions"]} == {"leads.access", "users.view"}
 
 
 async def test_create_role_as_sales_rep_returns_403(client: AsyncClient, make_user, auth_headers):

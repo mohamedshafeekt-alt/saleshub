@@ -66,6 +66,31 @@ def _csv_bytes(rows: list[dict]) -> bytes:
     return buffer.getvalue().encode("utf-8")
 
 
+async def test_import_leads_defers_notify_emails_to_background_task(db_session: AsyncSession):
+    """Every row's create_lead call must defer notify-on-create emails to a
+    background_tasks handle, same as the single-lead create route -- an
+    import doesn't pass background_tasks through, each row awaits SMTP
+    sends inline for every notify-on-create admin, which is what makes a
+    multi-row import slow (N rows x M admins sequential SMTP round-trips
+    inside the request)."""
+    from fastapi import BackgroundTasks
+
+    uploader = await _make_user(db_session, "uploader-bg@acme.com")
+    admin = await _make_user(db_session, "bg-import-admin@example.com", UserRole.ADMIN)
+    fake_sender = FakeEmailSender()
+    background_tasks = BackgroundTasks()
+    row = {"first_name": "Jane", "company": "Acme Corp", "email": "bg-import-lead@acme.com", "source": "website"}
+
+    result = await import_leads(
+        db_session, _csv_bytes([row]), "leads.csv", uploader, fake_sender, background_tasks=background_tasks
+    )
+
+    assert result.created == 1
+    assert fake_sender.calls == []  # not sent yet -- deferred, not blocking the import request
+    await background_tasks()
+    assert {call["to"] for call in fake_sender.calls} == {admin.email}
+
+
 def test_build_lead_import_template_xlsx_has_header_and_example_row():
     content = build_lead_import_template("xlsx")
 

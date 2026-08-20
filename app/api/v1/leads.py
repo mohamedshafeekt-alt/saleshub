@@ -35,6 +35,7 @@ from app.services.lead_activity_service import (
     update_lead_activity,
 )
 from app.services.lead_service import (
+    DuplicateLeadContactError,
     DuplicateLeadEmailError,
     LeadAccessForbiddenError,
     LeadNotFoundError,
@@ -75,6 +76,8 @@ async def upsert_lead_route(
     except LeadAccessForbiddenError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except DuplicateLeadEmailError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except DuplicateLeadContactError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 
     await db.commit()
@@ -163,6 +166,7 @@ async def download_lead_import_template_route(
 @router.post("/import", response_model=LeadImportResult)
 async def import_leads_route(
     file: UploadFile,
+    background_tasks: BackgroundTasks,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
     email_sender: EmailSender = Depends(get_email_sender),
@@ -174,7 +178,7 @@ async def import_leads_route(
     try:
         # import_leads commits each successful row itself (see its module
         # docstring), so there's nothing left pending to commit here.
-        return await import_leads(db, content, file.filename, current_user, email_sender)
+        return await import_leads(db, content, file.filename, current_user, email_sender, background_tasks)
     except LeadImportFileError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

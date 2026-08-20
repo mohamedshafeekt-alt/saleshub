@@ -227,6 +227,47 @@ async def test_create_account_returns_owner_name_and_contact_count(db_session: A
     assert account.deal_count == 0
 
 
+async def test_create_account_notifies_users_with_notify_on_create_permission(db_session: AsyncSession):
+    from app.models.notification import Notification
+
+    admin = await _make_user(db_session, "admin-notify-account@example.com", UserRole.ADMIN)
+    await _make_user(db_session, "rep-not-notified-account@example.com", UserRole.SALES_REP)
+
+    data = AccountCreate(company="Notify Account Co", domain="notify-account.example.com", tier=LeadTier.GOLD, owner_id=admin.id)
+    account = await create_account(db_session, data, admin)
+
+    result = await db_session.execute(
+        select(Notification).where(
+            Notification.recipient_id == admin.id, Notification.type == NotificationType.ACCOUNT_CREATED
+        )
+    )
+    notification = result.scalar_one()
+    assert notification.entity_type == "account"
+    assert notification.entity_id == account.id
+
+
+async def test_create_account_does_not_notify_deactivated_or_deleted_admins(db_session: AsyncSession):
+    from app.models.notification import Notification
+
+    admin_active = await _make_user(db_session, "admin-active-account@example.com", UserRole.ADMIN)
+    admin_deactivated = await _make_user(db_session, "admin-deactivated-account@example.com", UserRole.ADMIN)
+    admin_deactivated.is_active = False
+    await db_session.flush()
+
+    data = AccountCreate(
+        company="Notify Active Only Account Co",
+        domain="notify-active-only-account.example.com",
+        tier=LeadTier.GOLD,
+        owner_id=admin_active.id,
+    )
+    await create_account(db_session, data, admin_active)
+
+    result = await db_session.execute(
+        select(Notification.recipient_id).where(Notification.type == NotificationType.ACCOUNT_CREATED)
+    )
+    assert set(result.scalars().all()) == {admin_active.id}
+
+
 async def test_get_account_includes_owner_name_and_deal_count(
     db_session: AsyncSession, make_account, make_deal
 ):

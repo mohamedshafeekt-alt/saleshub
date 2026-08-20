@@ -209,6 +209,12 @@ async def make_user(db_session: AsyncSession):
         db_session.add(user)
         await db_session.flush()
         await db_session.commit()
+        # role is lazy="selectin" but user was inserted directly (not loaded
+        # via a query), so it's never actually been populated -- refresh it
+        # so a bare `user.permission_codes` access elsewhere doesn't try a
+        # lazy load outside of an active greenlet (see _make_user helpers in
+        # tests/services/test_deal_service.py etc. for the same fix).
+        await db_session.refresh(user, attribute_names=["role"])
         return user
 
     return _make_user

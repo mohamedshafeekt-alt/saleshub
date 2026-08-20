@@ -1,26 +1,32 @@
 """Contact business logic: plain CRUD on the standalone Contact entity, plus
-role-gated (not ownership-scoped) listing and the Contact Overview screen.
+scoped listing and the Contact Overview screen.
 
 Contact has no owner_id and, as of the contact_accounts refactor, no single
 owning Account either (a Contact can be linked to more than one Account) --
-there is no coherent single account to gate access against anymore, so these
-operations are role-gated only (via the router's require_role dependency),
-not ownership-scoped. Account-scoped contact creation/update (with the
-is_primary flag) lives in contact_account_service.py instead.
+there is no coherent single account to gate access against anymore. Without
+contacts.view_all, a requester only sees a Contact that's linked (via
+ContactAccount or DealContact) to an Account/Deal they own, or -- for a
+Contact with no links at all yet -- one they created themselves (see
+_contact_visibility_filter). Mirrors deal_service/account_service's
+owner_id-vs-*_VIEW_ALL pattern, adapted for a many-owner entity.
+Account-scoped contact creation/update (with the is_primary flag) lives in
+contact_account_service.py instead.
 """
 
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.permission_codes import CONTACTS_VIEW_ALL
 from app.models.account import Account
 from app.models.audit_log import AuditLog
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
+from app.models.deal import Deal
 from app.models.deal_contact import DealContact
 from app.models.enums import AuditAction, LeadTier
 from app.models.user import User
@@ -36,6 +42,11 @@ _OVERVIEW_EAGER_LOAD = (
 
 class ContactNotFoundError(Exception):
     """Raised when a contact id does not exist."""
+
+
+class ContactAccessForbiddenError(Exception):
+    """Raised when a requester without contacts.view_all isn't linked to
+    this contact's Account/Deal (and didn't create it, if it's unlinked)."""
 
 
 class DuplicateContactEmailError(Exception):
@@ -72,7 +83,49 @@ async def create_contact(db: AsyncSession, data: ContactCreate, requester: User)
     return contact
 
 
+def _contact_visibility_filter(requester: User) -> Any:
+    """SQL predicate: true iff `requester` may see this Contact without
+    contacts.view_all (callers check that permission first and skip this
+    filter entirely if it's present). True when linked via ContactAccount to
+    an Account the requester owns, linked via DealContact to a Deal the
+    requester owns, or -- for a Contact with no links at all -- when the
+    requester is who created it (the audit log's CREATED row, same signal
+    get_contact_overview surfaces as created_by)."""
+    owns_via_account = (
+        select(ContactAccount.id)
+        .join(Account, ContactAccount.account_id == Account.id)
+        .where(ContactAccount.contact_id == Contact.id, Account.owner_id == requester.id)
+        .exists()
+    )
+    owns_via_deal = (
+        select(DealContact.id)
+        .join(Deal, DealContact.deal_id == Deal.id)
+        .where(DealContact.contact_id == Contact.id, Deal.owner_id == requester.id)
+        .exists()
+    )
+    has_any_link = or_(
+        select(ContactAccount.id).where(ContactAccount.contact_id == Contact.id).exists(),
+        select(DealContact.id).where(DealContact.contact_id == Contact.id).exists(),
+    )
+    created_by_requester = (
+        select(AuditLog.id)
+        .where(
+            AuditLog.table_name == "contacts",
+            AuditLog.record_id == Contact.id,
+            AuditLog.action == AuditAction.CREATED.value,
+            AuditLog.actor_id == requester.id,
+        )
+        .exists()
+    )
+    return or_(owns_via_account, owns_via_deal, and_(~has_any_link, created_by_requester))
+
+
 async def _get_contact_or_raise(db: AsyncSession, contact_id: int) -> Contact:
+    """Existence check only -- no visibility scoping. Used internally where
+    the caller already has its own authorization (e.g. deal_service attaching
+    an existing contact as a stakeholder on a deal it's already checked
+    access to) and just needs to know the id is real. Contact-facing reads
+    should go through get_contact instead."""
     result = await db.execute(select(Contact).where(Contact.id == contact_id))
     contact = result.scalar_one_or_none()
     if contact is None:
@@ -80,12 +133,30 @@ async def _get_contact_or_raise(db: AsyncSession, contact_id: int) -> Contact:
     return contact
 
 
-async def get_contact(db: AsyncSession, contact_id: int) -> Contact:
+async def contact_exists(db: AsyncSession, contact_id: int) -> Contact:
+    """Public existence-only lookup for other services -- see
+    _get_contact_or_raise's docstring for why this skips visibility scoping."""
     return await _get_contact_or_raise(db, contact_id)
 
 
-async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate, requester: User) -> Contact:
+async def _assert_contact_visible(db: AsyncSession, contact: Contact, requester: User) -> None:
+    if CONTACTS_VIEW_ALL in requester.permission_codes:
+        return
+    visible = (
+        await db.execute(select(Contact.id).where(Contact.id == contact.id, _contact_visibility_filter(requester)))
+    ).first()
+    if visible is None:
+        raise ContactAccessForbiddenError(f"Not permitted to access contact: {contact.id}")
+
+
+async def get_contact(db: AsyncSession, contact_id: int, requester: User) -> Contact:
     contact = await _get_contact_or_raise(db, contact_id)
+    await _assert_contact_visible(db, contact, requester)
+    return contact
+
+
+async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate, requester: User) -> Contact:
+    contact = await get_contact(db, contact_id, requester)
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(contact, field, value)
@@ -107,7 +178,7 @@ async def update_contact(db: AsyncSession, contact_id: int, data: ContactUpdate,
 
 
 async def delete_contact(db: AsyncSession, contact_id: int, requester: User) -> None:
-    contact = await _get_contact_or_raise(db, contact_id)
+    contact = await get_contact(db, contact_id, requester)
     contact_id_ = contact.id
     name = f"{contact.first_name} {contact.last_name or ''}".strip()
     await db.delete(contact)
@@ -131,7 +202,7 @@ def _primary_account_link(contact: Contact) -> ContactAccount | None:
 
 
 async def get_contact_overview(
-    db: AsyncSession, contact_id: int
+    db: AsyncSession, contact_id: int, requester: User
 ) -> tuple[Contact, ContactAccount | None, int, str | None]:
     """Contact fields + its representative Account link (see
     _primary_account_link) + how many Deals it's linked to via DealContact +
@@ -146,6 +217,7 @@ async def get_contact_overview(
     contact = result.scalar_one_or_none()
     if contact is None:
         raise ContactNotFoundError(f"Contact not found: {contact_id}")
+    await _assert_contact_visible(db, contact, requester)
 
     account_link = _primary_account_link(contact)
     deal_count = (
@@ -177,6 +249,7 @@ async def get_contact_overview(
 async def list_contacts(
     db: AsyncSession,
     *,
+    requester: User,
     owner_id: int | None = None,
     account_id: int | None = None,
     tier: LeadTier | None = None,
@@ -195,8 +268,14 @@ async def list_contacts(
     first/last name or email. date_from/date_to filter on the Contact row's
     own created_at (not the link's). Each result pairs the Contact with its
     single representative Account link (see _primary_account_link) for
-    display."""
+    display.
+
+    Without contacts.view_all, results are forced to contacts visible to
+    `requester` (see _contact_visibility_filter) regardless of owner_id --
+    same pattern as deal_service._deal_filters."""
     filters: list[Any] = []
+    if CONTACTS_VIEW_ALL not in requester.permission_codes:
+        filters.append(_contact_visibility_filter(requester))
     if search is not None:
         pattern = f"%{search}%"
         filters.append(
@@ -246,6 +325,7 @@ async def list_contacts(
 async def export_contacts(
     db: AsyncSession,
     *,
+    requester: User,
     owner_id: int | None = None,
     account_id: int | None = None,
     tier: LeadTier | None = None,
@@ -254,13 +334,15 @@ async def export_contacts(
     date_from: date | None = None,
     date_to: date | None = None,
 ) -> list[dict[str, Any]]:
-    """All contacts matching list_contacts's filters. No dedicated
-    no-pagination query -- reuses list_contacts with a large limit.
+    """All contacts matching list_contacts's filters (same requester
+    scoping). No dedicated no-pagination query -- reuses list_contacts with
+    a large limit.
     # ponytail: large-limit reuse instead of a bespoke unpaginated query;
     # switch to a real no-pagination query if contact counts get large.
     """
     items, _total = await list_contacts(
         db,
+        requester=requester,
         owner_id=owner_id,
         account_id=account_id,
         tier=tier,

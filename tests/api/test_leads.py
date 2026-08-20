@@ -561,6 +561,23 @@ async def test_update_lead_partial_patch_returns_200(client: AsyncClient, make_u
     assert body["email"] == "patch-me@example.com"
 
 
+async def test_update_lead_adds_additional_contacts(client: AsyncClient, make_user, auth_headers, make_lead):
+    owner = await make_user(email="rep-add-contact-api@example.com", role=UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="add-contact-api@example.com")
+    headers = auth_headers(owner)
+
+    response = await client.post(
+        LEADS_URL,
+        json={"id": lead.id, "contacts": [{"email": "new-contact-api@example.com"}]},
+        headers=headers,
+    )
+    assert response.status_code == 200
+
+    detail = await client.get(f"{LEADS_URL}/{lead.id}", headers=headers)
+    contact_emails = {contact["email"] for contact in detail.json()["contacts"]}
+    assert "new-contact-api@example.com" in contact_emails
+
+
 async def test_update_lead_sets_is_favourite_and_lists_it_first(
     client: AsyncClient, make_user, auth_headers, make_lead
 ):
@@ -616,6 +633,28 @@ async def test_update_lead_duplicate_email_returns_409(
     response = await client.post(
         LEADS_URL,
         json={"id": lead_to_update.id, "email": "patch-dup-taken@example.com"},
+        headers=headers,
+    )
+
+    assert response.status_code == 409
+
+
+async def test_create_lead_two_additional_contacts_sharing_a_phone_returns_409(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-create-dup-contact-phone@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    response = await client.post(
+        LEADS_URL,
+        json=_lead_payload(
+            owner_id=rep.id,
+            email="create-dup-contact-phone@example.com",
+            contacts=[
+                {"email": "a@example.com", "phone": "+1-555-0199"},
+                {"email": "b@example.com", "phone": "+1-555-0199"},
+            ],
+        ),
         headers=headers,
     )
 

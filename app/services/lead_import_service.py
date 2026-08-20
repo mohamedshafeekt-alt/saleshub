@@ -21,6 +21,7 @@ import csv
 import io
 from typing import Literal
 
+from fastapi import BackgroundTasks
 from openpyxl import Workbook, load_workbook
 from pydantic import ValidationError
 from sqlalchemy import func, select
@@ -133,10 +134,21 @@ def _parse_rows(file_bytes: bytes, filename: str) -> list[dict[str, str | None]]
 
 
 async def import_leads(
-    db: AsyncSession, file_bytes: bytes, filename: str, requester: User, email_sender: EmailSender
+    db: AsyncSession,
+    file_bytes: bytes,
+    filename: str,
+    requester: User,
+    email_sender: EmailSender,
+    background_tasks: BackgroundTasks | None = None,
 ) -> LeadImportResult:
     """requester is the user uploading the file: every created lead is owned
-    by them -- see module docstring."""
+    by them -- see module docstring.
+
+    background_tasks is threaded straight through to each row's create_lead
+    call so notify-on-create emails defer to it instead of being awaited
+    inline -- without it, create_lead sends one SMTP round-trip per
+    notify-on-create admin PER ROW, which is what makes a multi-row import
+    slow (same failure mode already fixed for single-lead create)."""
     rows = _parse_rows(file_bytes, filename)
 
     row_emails = {row["email"].lower() for row in rows if row["email"]}
@@ -180,7 +192,7 @@ async def import_leads(
             continue
 
         try:
-            await create_lead(db, data, email_sender, requester=requester)
+            await create_lead(db, data, email_sender, requester=requester, background_tasks=background_tasks)
         except (DuplicateLeadEmailError, IntegrityError) as exc:
             errors.append(LeadImportRowError(row=index, error=str(exc)))
             continue

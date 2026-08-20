@@ -1,6 +1,8 @@
 """FastAPI app entrypoint: router registration."""
 
+from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import AsyncIterator
 
 from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -27,13 +29,25 @@ from app.core.logging import configure_logging
 from app.core.deps import bearer_scheme
 from app.core.rbac import public
 from app.core.rbac_middleware import enforce_rbac
+from app.core.rbac_seed import seed_on_startup
 
 configure_logging()
 
 Path("media/avatars").mkdir(parents=True, exist_ok=True)
 
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Idempotent -- keeps the permission catalog/starter roles in sync with
+    # app.core.rbac_seed._PERMISSIONS on every process start, so a newly
+    # added permission code doesn't need scripts/seed_admin.py re-run by hand.
+    await seed_on_startup()
+    yield
+
+
 app = FastAPI(
     title="Sales CRM Platform",
+    lifespan=lifespan,
     dependencies=[Depends(bearer_scheme), Depends(enforce_rbac)],
 )
 

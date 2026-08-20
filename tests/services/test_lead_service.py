@@ -20,6 +20,7 @@ from app.models.user import User
 from tests.support.roles import UserRole, role_id_for
 from app.schemas.lead import LeadContactInput, LeadUpsert
 from app.services.lead_service import (
+    DuplicateLeadContactError,
     DuplicateLeadEmailError,
     LeadAccessForbiddenError,
     LeadNotFoundError,
@@ -141,6 +142,48 @@ async def test_create_lead_inserts_extra_contacts_alongside_primary(db_session: 
     assert contacts["second@acme.com"].first_name == "Sam"
     assert contacts["second@acme.com"].last_name == "Iyer"
     assert contacts["third@acme.com"].first_name is None
+
+
+async def test_create_lead_raises_for_two_additional_contacts_sharing_an_email(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-dup-contact-email@example.com", UserRole.SALES_REP)
+
+    data = LeadUpsert(
+        first_name="Jane", company="Acme Corp", email="primary-dup-email@acme.com",
+        source=LeadSource.WEBSITE, owner_id=owner.id,
+        contacts=[LeadContactInput(email="dup@acme.com"), LeadContactInput(email="dup@acme.com")],
+    )
+
+    with pytest.raises(DuplicateLeadContactError):
+        await create_lead(db_session, data, FakeEmailSender(), requester=owner)
+
+
+async def test_create_lead_raises_for_two_additional_contacts_sharing_a_phone(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-dup-contact-phone@example.com", UserRole.SALES_REP)
+
+    data = LeadUpsert(
+        first_name="Jane", company="Acme Corp", email="primary-dup-phone@acme.com",
+        source=LeadSource.WEBSITE, owner_id=owner.id,
+        contacts=[
+            LeadContactInput(email="a@acme.com", phone="+15550101"),
+            LeadContactInput(email="b@acme.com", phone="+15550101"),
+        ],
+    )
+
+    with pytest.raises(DuplicateLeadContactError):
+        await create_lead(db_session, data, FakeEmailSender(), requester=owner)
+
+
+async def test_create_lead_raises_when_additional_contact_matches_primary_phone(db_session: AsyncSession):
+    owner = await _make_user(db_session, "owner-dup-contact-primary@example.com", UserRole.SALES_REP)
+
+    data = LeadUpsert(
+        first_name="Jane", company="Acme Corp", email="primary-vs-extra@acme.com", phone="+15550102",
+        source=LeadSource.WEBSITE, owner_id=owner.id,
+        contacts=[LeadContactInput(email="extra@acme.com", phone="+15550102")],
+    )
+
+    with pytest.raises(DuplicateLeadContactError):
+        await create_lead(db_session, data, FakeEmailSender(), requester=owner)
 
 
 async def test_create_lead_notifies_all_admins(db_session: AsyncSession):
@@ -687,6 +730,165 @@ async def test_update_lead_duplicate_email_raises(db_session: AsyncSession, make
             db_session,
             lead_id=lead_to_update.id,
             data=LeadUpsert(id=lead_to_update.id, email="taken@example.com"),
+            requester=owner,
+        )
+
+
+async def test_update_lead_adds_new_additional_contacts(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-upd-add-contact@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="add-contact@example.com")
+
+    await update_lead(
+        db_session,
+        lead_id=lead.id,
+        data=LeadUpsert(
+            id=lead.id,
+            contacts=[LeadContactInput(first_name="Sam", last_name="Iyer", email="new-extra@example.com")],
+        ),
+        requester=owner,
+    )
+
+    result = await db_session.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
+    emails = {contact.email for contact in result.scalars().all()}
+    assert "new-extra@example.com" in emails
+
+
+async def test_update_lead_resending_full_contacts_list_keeps_existing_and_adds_new(
+    db_session: AsyncSession, make_lead
+):
+    """Mirrors the actual frontend flow: the edit form always resends the
+    full current additional-contacts set (existing + newly added), not a
+    delta -- so a second contact appended alongside an already-saved one
+    must not drop the first."""
+    owner = await _make_user(db_session, "owner-upd-resend@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="resend@example.com")
+
+    await update_lead(
+        db_session,
+        lead_id=lead.id,
+        data=LeadUpsert(id=lead.id, contacts=[LeadContactInput(email="first-extra@example.com")]),
+        requester=owner,
+    )
+    await update_lead(
+        db_session,
+        lead_id=lead.id,
+        data=LeadUpsert(
+            id=lead.id,
+            contacts=[
+                LeadContactInput(email="first-extra@example.com"),
+                LeadContactInput(email="second-extra@example.com"),
+            ],
+        ),
+        requester=owner,
+    )
+
+    result = await db_session.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
+    emails = {contact.email for contact in result.scalars().all()}
+    assert emails == {"first-extra@example.com", "second-extra@example.com"}
+
+
+async def test_update_lead_without_contacts_field_leaves_existing_contacts_untouched(
+    db_session: AsyncSession, make_lead
+):
+    """Regression guard: the favourite-star toggle and other partial updates
+    call update_lead with a payload that never includes `contacts` at all
+    (not even `[]`) -- that must not be treated as "clear all contacts"."""
+    owner = await _make_user(db_session, "owner-upd-no-contacts-key@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="no-contacts-key@example.com")
+    await update_lead(
+        db_session,
+        lead_id=lead.id,
+        data=LeadUpsert(id=lead.id, contacts=[LeadContactInput(email="keep-me@example.com")]),
+        requester=owner,
+    )
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, is_favourite=True), requester=owner)
+
+    result = await db_session.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
+    emails = {contact.email for contact in result.scalars().all()}
+    assert "keep-me@example.com" in emails
+
+
+async def test_update_lead_removing_all_contacts_from_the_resent_list_clears_them(
+    db_session: AsyncSession, make_lead
+):
+    owner = await _make_user(db_session, "owner-upd-clear-contacts@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="clear-contacts@example.com")
+    await update_lead(
+        db_session,
+        lead_id=lead.id,
+        data=LeadUpsert(id=lead.id, contacts=[LeadContactInput(email="removable@example.com")]),
+        requester=owner,
+    )
+
+    await update_lead(db_session, lead_id=lead.id, data=LeadUpsert(id=lead.id, contacts=[]), requester=owner)
+
+    result = await db_session.execute(select(LeadContact).where(LeadContact.lead_id == lead.id))
+    emails = {contact.email for contact in result.scalars().all()}
+    assert "removable@example.com" not in emails
+
+
+async def test_update_lead_new_contact_duplicate_email_raises(db_session: AsyncSession, make_lead):
+    owner = await _make_user(db_session, "owner-upd-contact-dup@example.com", UserRole.SALES_REP)
+    # make_lead constructs the Lead row directly and skips the lead_contacts
+    # mirror create_lead normally inserts -- go through create_lead here so
+    # there's an actual lead_contacts row to collide with.
+    await create_lead(
+        db_session,
+        LeadUpsert(
+            first_name="Taken", company="Taken Co", email="already-taken-contact@example.com",
+            source=LeadSource.WEBSITE, owner_id=owner.id,
+        ),
+        FakeEmailSender(),
+        requester=owner,
+    )
+    lead = await make_lead(owner_id=owner.id, email="upd-contact-dup-lead@example.com")
+
+    with pytest.raises(DuplicateLeadEmailError):
+        await update_lead(
+            db_session,
+            lead_id=lead.id,
+            data=LeadUpsert(
+                id=lead.id, contacts=[LeadContactInput(email="already-taken-contact@example.com")]
+            ),
+            requester=owner,
+        )
+
+
+async def test_update_lead_raises_for_two_additional_contacts_sharing_a_phone(
+    db_session: AsyncSession, make_lead
+):
+    owner = await _make_user(db_session, "owner-upd-dup-contact-phone@example.com", UserRole.SALES_REP)
+    lead = await make_lead(owner_id=owner.id, email="upd-dup-contact-phone@example.com")
+
+    with pytest.raises(DuplicateLeadContactError):
+        await update_lead(
+            db_session,
+            lead_id=lead.id,
+            data=LeadUpsert(
+                id=lead.id,
+                contacts=[
+                    LeadContactInput(email="a@example.com", phone="+15550103"),
+                    LeadContactInput(email="b@example.com", phone="+15550103"),
+                ],
+            ),
+            requester=owner,
+        )
+
+
+async def test_update_lead_raises_when_additional_contact_matches_primary_phone(
+    db_session: AsyncSession, make_lead
+):
+    owner = await _make_user(db_session, "owner-upd-dup-contact-primary@example.com", UserRole.SALES_REP)
+    lead = await make_lead(
+        owner_id=owner.id, email="upd-dup-contact-primary@example.com", phone="+15550104"
+    )
+
+    with pytest.raises(DuplicateLeadContactError):
+        await update_lead(
+            db_session,
+            lead_id=lead.id,
+            data=LeadUpsert(id=lead.id, contacts=[LeadContactInput(email="extra@example.com", phone="+15550104")]),
             requester=owner,
         )
 
