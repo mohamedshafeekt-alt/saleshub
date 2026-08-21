@@ -727,6 +727,7 @@ async def test_convert_lead_to_account_creates_primary_contact_from_lead(
         last_name="Kumar",
         phone="9876543210",
         linkedin_url="https://linkedin.com/in/selva",
+        job_title="CFO",
     )
 
     account = await convert_lead_to_account(db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD)
@@ -746,6 +747,7 @@ async def test_convert_lead_to_account_creates_primary_contact_from_lead(
     assert contact.email == "convert-contact@example.com"
     assert contact.phone == "9876543210"
     assert contact.linkedin_url == "https://linkedin.com/in/selva"
+    assert contact.job_title == "CFO"
 
 
 async def test_convert_lead_to_account_carries_over_additional_lead_contacts(

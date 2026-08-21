@@ -384,6 +384,7 @@ async def convert_lead_to_account(
             email=lead.email,
             phone=lead.phone,
             linkedin_url=lead.linkedin_url,
+            job_title=lead.job_title,
         )
         db.add(contact)
         await db.flush()
