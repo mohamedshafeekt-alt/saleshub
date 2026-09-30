@@ -1037,6 +1037,17 @@ async def test_list_deals_to_export_returns_valid_xlsx_with_expected_rows(
         "Owner",
         "Expected Close Date",
         "Cold Reason",
+        "Pain Intensity (CHAMP)",
+        "Budget (BANT)",
+        "Urgency / Timeline (BANT)",
+        "Decision Maker (MEDDIC / BANT Authority)",
+        "Decision Speed (MEDDIC Decision Process)",
+        "Engagement Fit (InnoBoon Specific)",
+        "Reference Strength (InnoBoon Specific)",
+        "Account Ceiling (MEDDIC Strategic Value)",
+        "Total Score",
+        "Response Mode",
+        "Proposal SLA",
     ]
     data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
     assert any(row[0] == "Export Xlsx Deal" for row in data_rows)
@@ -1505,3 +1516,160 @@ async def test_list_and_delete_deal_documents(
 
     list_after_delete = await client.get(f"{DEALS_URL}/{deal.id}/documents", headers=headers)
     assert list_after_delete.json() == []
+
+
+# --- D1–D8 scoring ---------------------------------------------------------
+
+# 3+2+2+2+2+2+1+1 = 15 -> Mode B, the example from the requirement.
+SCORES_15 = {
+    "D1": "acute",
+    "D2": "indicative_in_range",
+    "D3": "start_in_30_90_days",
+    "D4": "champion",
+    "D5": "moderate",
+    "D6": "moderate_fit",
+    "D7": "cold",
+    "D8": "low_ceiling",
+}
+
+
+async def test_scoring_dimensions_lists_labels_levels_and_tooltips_without_scores(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-scoring-dims@example.com", role=UserRole.SALES_REP)
+
+    response = await client.get(f"{DEALS_URL}/scoring-dimensions", headers=auth_headers(rep))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [d["key"] for d in body] == [f"D{i}" for i in range(1, 9)]
+    budget = body[1]
+    assert budget["label"] == "Budget (BANT)"
+    assert budget["levels"][2] == {
+        "key": "confirmed_above_20l",
+        "label": "Confirmed above ₹20L",
+        "description": "Budget stated explicitly, approved, and above ₹20L / $25K. Or a defined monthly retainer.",
+    }
+    assert "score" not in response.text
+
+
+async def test_create_deal_with_scores_returns_total_mode_and_sla(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage
+):
+    rep = await make_user(email="rep-score-create@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Score Co")
+    stage = await make_deal_stage(name="Score Stage")
+
+    response = await client.post(
+        DEALS_URL,
+        json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=stage.id, scores=SCORES_15),
+        headers=auth_headers(rep),
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["scores"] == SCORES_15
+    assert body["total_score"] == 15
+    assert body["response_mode"] == "Mode B — Build Case"
+    assert body["proposal_sla"] == "48 Hrs + Discovery"
+
+
+async def test_create_deal_without_scores_returns_nulls(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage
+):
+    rep = await make_user(email="rep-score-none@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="No Score Co")
+    stage = await make_deal_stage(name="No Score Stage")
+
+    response = await client.post(
+        DEALS_URL,
+        json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=stage.id),
+        headers=auth_headers(rep),
+    )
+
+    body = response.json()
+    assert (body["scores"], body["total_score"], body["response_mode"], body["proposal_sla"]) == (
+        None, None, None, None,
+    )
+
+
+async def test_create_deal_rejects_partial_unknown_or_invalid_scores(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage
+):
+    rep = await make_user(email="rep-score-bad@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Bad Score Co")
+    stage = await make_deal_stage(name="Bad Score Stage")
+    missing_d8 = {k: v for k, v in SCORES_15.items() if k != "D8"}
+
+    for scores in (missing_d8, SCORES_15 | {"D9": "mild"}, SCORES_15 | {"D1": "extreme"}):
+        response = await client.post(
+            DEALS_URL,
+            json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=stage.id, scores=scores),
+            headers=auth_headers(rep),
+        )
+        assert response.status_code == 422, scores
+
+
+async def test_patch_deal_sets_then_clears_scores_and_list_carries_them(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal, make_deal_stage
+):
+    rep = await make_user(email="rep-score-patch@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Patch Score Co")
+    deal = await make_deal(account_id=account.id, owner_id=rep.id)
+    headers = auth_headers(rep)
+
+    set_response = await client.patch(f"{DEALS_URL}/{deal.id}", json={"scores": SCORES_15}, headers=headers)
+    assert set_response.status_code == 200
+    assert set_response.json()["total_score"] == 15
+
+    listed = await client.get(DEALS_URL, headers=headers)
+    [item] = [i for i in listed.json()["items"] if i["id"] == deal.id]
+    assert item["response_mode"] == "Mode B — Build Case"
+
+    cleared = await client.patch(f"{DEALS_URL}/{deal.id}", json={"scores": None}, headers=headers)
+    assert cleared.status_code == 200
+    assert cleared.json()["scores"] is None
+    assert cleared.json()["total_score"] is None
+
+
+async def test_list_deals_to_export_writes_scoring_columns(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    import io
+
+    rep = await make_user(email="rep-score-export@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Score Export Co")
+    await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Scored Export", scores=SCORES_15)
+    await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Unscored Export")
+
+    response = await client.get(DEALS_URL, params={"to_export": "true"}, headers=auth_headers(rep))
+
+    rows = {row[0]: row for row in openpyxl.load_workbook(io.BytesIO(response.content)).active.iter_rows(
+        min_row=2, values_only=True
+    )}
+    # Columns after "Cold Reason": 8 level labels, then total / mode / SLA.
+    assert rows["Scored Export"][10:] == (
+        "Acute", "Indicative / in range", "Start in 30–90 days", "Champion",
+        "Moderate (3–6 weeks)", "Moderate fit", "Cold", "Low ceiling",
+        15, "Mode B — Build Case", "48 Hrs + Discovery",
+    )
+    assert rows["Unscored Export"][10:] == (None,) * 11
+
+
+async def test_get_deal_to_export_deal_sheet_includes_scoring(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    import io
+
+    rep = await make_user(email="rep-score-export-one@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Score Export One Co")
+    deal = await make_deal(account_id=account.id, owner_id=rep.id, scores=SCORES_15)
+
+    response = await client.get(f"{DEALS_URL}/{deal.id}", params={"to_export": "true"}, headers=auth_headers(rep))
+
+    sheet = openpyxl.load_workbook(io.BytesIO(response.content))["Deal"]
+    fields = dict(sheet.iter_rows(min_row=2, values_only=True))
+    assert fields["Budget (BANT)"] == "Indicative / in range"
+    assert fields["Total Score"] == 15
+    assert fields["Response Mode"] == "Mode B — Build Case"
+    assert fields["Proposal SLA"] == "48 Hrs + Discovery"

@@ -6,8 +6,10 @@ from datetime import date
 from typing import TYPE_CHECKING
 
 from sqlalchemy import Enum, ForeignKey
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.deal_scoring import score_summary, total_score
 from app.db.base import Base
 from app.models.enums import LeadTier
 
@@ -33,6 +35,8 @@ class Deal(Base):
         nullable=True,
     )
     cold_reason: Mapped[str | None] = mapped_column(nullable=True)
+    # D1–D8 level keys, {"D1": "mild", ...}; see app/core/deal_scoring.py.
+    scores: Mapped[dict[str, str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
 
     # Eager (joined) so DealRead's account_name/owner_name/stage_name/
@@ -59,3 +63,15 @@ class Deal(Base):
     @property
     def stage_is_cold(self) -> bool:
         return self.stage.is_cold
+
+    @property
+    def total_score(self) -> int | None:
+        return total_score(self.scores)
+
+    @property
+    def response_mode(self) -> str | None:
+        return score_summary(self.total_score)[0]
+
+    @property
+    def proposal_sla(self) -> str | None:
+        return score_summary(self.total_score)[1]
