@@ -110,10 +110,11 @@ read/unread, mark-all/bulk-read, bulk soft-delete) — populated on new-lead cre
 - [x] Bug fix — Convert Lead to Account dropped the lead's `job_title` on the new primary Contact: `convert_lead_to_account` built `Contact(...)` from the lead's `first_name`/`last_name`/`email`/`phone`/`linkedin_url` but never passed `job_title`, even though both `Lead` and `Contact` have that field. Added `job_title=lead.job_title` to that construction
 - [x] Activity log for Account (Lead's and Deal's are done; Account's is still open)
 - [x] Dashboard aggregation endpoints (tentative fidgets for now)
+- [x] D1–D8 deal scoring (BANT/MEDDIC/CHAMP): `GET /api/v1/deals/scoring-dimensions` serves dimensions, levels and tooltips from `app/core/deal_scoring.py`; deals take all-or-nothing `scores` on create/update and return computed `total_score`, `response_mode`, `proposal_sla` (Lead Tracker thresholds); both xlsx exports (list + single-deal) carry each dimension's level plus total / mode / SLA
 - [ ] Static Pre-Sales Checklist per deal
 
 ## Milestones (per Phase 1 kickoff)
 - **Week 1** — Login, RBAC, Lead Management, Navigation
 - **Week 2** — Accounts, Contacts, Deals, Activities, Notifications
 - **Week 3** — Dashboard, QA/UAT, optimization, deployment
-m
+

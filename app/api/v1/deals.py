@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.deal_scoring import SCORING_DESCRIPTIONS, SCORING_DIMENSIONS, scoring_export_fields
 from app.core.deps import get_current_user
 from app.core.permission_codes import DEALS_ACCESS
 from app.core.rbac import tag_router_permissions
@@ -22,6 +23,8 @@ from app.schemas.deal import (
     DealsListResponse,
     DealStageHistoryRead,
     DealUpdate,
+    ScoringDimensionRead,
+    ScoringLevelRead,
 )
 from app.schemas.deal_activity import (
     DealActivityCreate,
@@ -200,11 +203,13 @@ async def list_deals_route(
             [
                 "Deal Name", "Account", "Contact", "Value", "Currency",
                 "Stage", "Tier", "Owner", "Expected Close Date", "Cold Reason",
+                *scoring_export_fields(None),
             ],
             [
                 [
                     row["deal_name"], row["account"], row["contact"], row["value"], row["currency"],
                     row["stage"], row["tier"], row["owner"], row["expected_close_date"], row["cold_reason"],
+                    *row["scoring"].values(),
                 ]
                 for row in rows
             ],
@@ -271,6 +276,22 @@ async def list_deals_route(
     )
 
 
+# Registered before /{deal_id} so "scoring-dimensions" isn't parsed as an id.
+@router.get("/scoring-dimensions", response_model=list[ScoringDimensionRead])
+async def list_scoring_dimensions_route() -> list[ScoringDimensionRead]:
+    return [
+        ScoringDimensionRead(
+            key=dim,
+            label=spec["label"],
+            levels=[
+                ScoringLevelRead(key=level, label=label, description=SCORING_DESCRIPTIONS[dim][level])
+                for level, (label, _score) in spec["levels"].items()
+            ],
+        )
+        for dim, spec in SCORING_DIMENSIONS.items()
+    ]
+
+
 @router.get("/{deal_id}", response_model=DealRead)
 async def get_deal_route(
     deal_id: int,
@@ -302,6 +323,7 @@ async def get_deal_route(
         "Tier": deal_read.tier.value if deal_read.tier else None,
         "Cold Reason": deal_read.cold_reason,
         "Owner": deal_read.owner_name,
+        **scoring_export_fields(deal_read.scores),
     }
     history = await list_stage_history(db, deal_id, requester=current_user)
     history_rows = [

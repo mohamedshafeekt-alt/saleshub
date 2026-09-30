@@ -11,6 +11,7 @@ from typing import Any, Literal
 from sqlalchemy import ColumnElement, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.deal_scoring import scoring_export_fields
 from app.core.permission_codes import DEALS_NOTIFY_ON_CREATE, DEALS_VIEW_ALL
 from app.models.account import Account
 from app.models.contact import Contact
@@ -536,6 +537,7 @@ async def export_deals(
             owner_name,
             Deal.expected_close_date,
             Deal.cold_reason,
+            Deal.scores,
         )
         .join(Account, Deal.account_id == Account.id)
         .join(DealStage, Deal.stage_id == DealStage.id)
@@ -560,6 +562,7 @@ async def export_deals(
             "owner": row[7],
             "expected_close_date": row[8],
             "cold_reason": row[9],
+            "scoring": scoring_export_fields(row[10]),
         }
         for row in rows
     ]

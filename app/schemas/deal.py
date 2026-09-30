@@ -1,12 +1,16 @@
 """Deal request/response schemas."""
 
 from datetime import date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel
+from pydantic import AfterValidator, BaseModel
 from app.schemas.base import ORMBase
 
+from app.core.deal_scoring import validate_scores
 from app.models.enums import LeadTier
+
+# D1–D8 level keys; all-or-nothing, see app/core/deal_scoring.py.
+DealScores = Annotated[dict[str, str] | None, AfterValidator(validate_scores)]
 
 
 class DealCreate(BaseModel):
@@ -22,6 +26,7 @@ class DealCreate(BaseModel):
     tier: LeadTier | None = None
     owner_id: int
     cold_reason: str | None = None
+    scores: DealScores = None
 
 
 class DealUpdate(BaseModel):
@@ -35,6 +40,8 @@ class DealUpdate(BaseModel):
     tier: LeadTier | None = None
     owner_id: int | None = None
     cold_reason: str | None = None
+    # Explicit null clears the scoring.
+    scores: DealScores = None
     # Write-only input for the stage-history row's note. Never a column on
     # Deal -- must not be setattr'd onto the ORM object.
     note: str | None = None
@@ -64,6 +71,22 @@ class DealRead(ORMBase):
     owner_name: str
     stage_name: str
     stage_is_cold: bool
+    scores: dict[str, str] | None
+    total_score: int | None
+    response_mode: str | None
+    proposal_sla: str | None
+
+
+class ScoringLevelRead(BaseModel):
+    key: str
+    label: str
+    description: str
+
+
+class ScoringDimensionRead(BaseModel):
+    key: str
+    label: str
+    levels: list[ScoringLevelRead]
 
 
 class DealStageHistoryRead(ORMBase):
