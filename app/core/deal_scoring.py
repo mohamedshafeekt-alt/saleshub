@@ -2,8 +2,9 @@
 Tracker's "D Scoring Guide" sheet.
 
 The frontend renders the form purely from `GET /deals/scoring-dimensions`, so
-adding/removing a dimension or level here is the whole change. Scores stay
-server-side -- the UI only ever sees level keys/labels.
+adding/removing a dimension or level here is the whole change. Each level's
+points are exposed too (the deal page's Qualification card shows them), but
+totals, modes and priorities are still only ever computed here.
 """
 
 from datetime import datetime, timedelta
@@ -113,14 +114,14 @@ SCORING_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
 }
 
-# (minimum total, Response Mode, Proposal SLA, SLA hours), highest band first
-# -- the Lead Tracker's TOTAL SCORE -> RESPONSE MODE / PROPOSAL SLA formulas.
-# Mode D has no proposal due, so no hours.
+# (minimum total, Response Mode, Proposal SLA, SLA hours, Priority), highest
+# band first -- the Lead Tracker's TOTAL SCORE -> RESPONSE MODE / PROPOSAL SLA
+# formulas. Mode D has no proposal due, so no hours.
 _BANDS = [
-    (20, "Mode A — Strike Now", "24 Hours", 24),
-    (14, "Mode B — Build Case", "48 Hrs + Discovery", 48),
-    (8, "Mode C — Qualify First", "72 Hrs — Qualify Call", 72),
-    (1, "Mode D — Nurture", "No Proposal Yet", None),
+    (20, "Mode A — Strike Now", "24 Hours", 24, "Very High"),
+    (14, "Mode B — Build Case", "48 Hrs + Discovery", 48, "High"),
+    (8, "Mode C — Qualify First", "72 Hrs — Qualify Call", 72, "Medium"),
+    (1, "Mode D — Nurture", "No Proposal Yet", None, "Low"),
 ]
 
 MODE_A_MIN = _BANDS[0][0]  # "Very high": Mode A, 20+
@@ -140,16 +141,24 @@ def total_score(scores: dict[str, str] | None) -> int | None:
 
 def score_summary(total: int | None) -> tuple[str | None, str | None]:
     """(Response Mode, Proposal SLA) for a total score."""
-    for minimum, mode, sla, _hours in _BANDS:
+    for minimum, mode, sla, _hours, _priority in _BANDS:
         if total is not None and total >= minimum:
             return mode, sla
     return None, None
 
 
+def priority(total: int | None) -> str | None:
+    """Very High / High / Medium / Low for Mode A / B / C / D; None when unscored."""
+    for minimum, _mode, _sla, _hours, label in _BANDS:
+        if total is not None and total >= minimum:
+            return label
+    return None
+
+
 def proposal_sla_due(received_at: datetime, total: int | None) -> datetime | None:
     """When the proposal is due: received time + the band's SLA hours. None
     when unscored or in Mode D (no proposal owed)."""
-    for minimum, _mode, _sla, hours in _BANDS:
+    for minimum, _mode, _sla, hours, _priority in _BANDS:
         if total is not None and total >= minimum:
             return received_at + timedelta(hours=hours) if hours else None
     return None
@@ -169,7 +178,7 @@ def validate_scores(scores: dict[str, str] | None) -> dict[str, str] | None:
 
 def scoring_export_fields(scores: dict[str, str] | None) -> dict[str, str | int | None]:
     """Ordered {column: value} for xlsx exports: each dimension's chosen level
-    label, then Total Score / Response Mode / Proposal SLA. Keys are the same
+    label, then Total Score / Response Mode / Proposal SLA / Priority. Keys are the same
     for every deal, so they double as the list export's headers."""
     fields: dict[str, str | int | None] = {
         spec["label"]: spec["levels"].get((scores or {}).get(dim), (None, None))[0]
@@ -177,4 +186,4 @@ def scoring_export_fields(scores: dict[str, str] | None) -> dict[str, str | int 
     }
     total = total_score(scores)
     mode, sla = score_summary(total)
-    return fields | {"Total Score": total, "Response Mode": mode, "Proposal SLA": sla}
+    return fields | {"Total Score": total, "Response Mode": mode, "Proposal SLA": sla, "Priority": priority(total)}

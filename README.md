@@ -116,6 +116,9 @@ read/unread, mark-all/bulk-read, bulk soft-delete) — populated on new-lead cre
 - [x] Deal `follow_up_date`, `originator` (User or `is_originator` Contact, options at `GET /api/v1/deals/originator-options`), `proposal_status` (not_sent / proposal_sent, with `proposal_sent_at`) and stored `proposal_sla_due_at` (received time + mode hours, kept in step with `scores`)
 - [x] Deal exports (list + single) lead with the Lead Tracker columns (ID, Date Received, Source, Source Detail, Company, primary Contact name/designation/email/phone, Stage, latest activity as Comment, Industry, Country, Engagement Type), then the app's own columns, follow-up/originator/proposal columns and scoring
 - [x] Dashboard deal tiles (`deal_tiles` on `GET /api/v1/dashboard`: In view, Very high, Overdue, Due today, Past SLA) with matching drill-down `GET /api/v1/deals?quick_filter=...` (same predicate, so counts equal list totals)
+- [x] Deal Priority — `priority` on every deal response (`Very High` / `High` / `Medium` / `Low` for Mode A / B / C / D, `null` when unscored), from the same score bands as Response Mode (`app.core.deal_scoring.priority`); also a "Priority" column in both deal xlsx exports
+- [x] Lead → Account conversion now carries the lead's `source` onto the new Account (it was dropped before); migration `e2c5a7b9d4f6` backfills `source` on already-converted accounts that still have none, from their `source_lead_id` lead
+- [x] `GET /api/v1/deals/scoring-dimensions` levels now include their `score` (1–3 points) — reverses the earlier "scores stay server-side" choice because the deal page's Qualification card shows each dimension's points (totals/mode/priority are still computed only server-side)
 - [ ] Static Pre-Sales Checklist per deal
 
 ## Milestones (per Phase 1 kickoff)

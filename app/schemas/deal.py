@@ -92,6 +92,7 @@ class DealRead(ORMBase):
     total_score: int | None
     response_mode: str | None
     proposal_sla: str | None
+    priority: str | None
     created_at: datetime
     follow_up_date: date | None
     originator: OriginatorRead | None
@@ -104,6 +105,7 @@ class ScoringLevelRead(BaseModel):
     key: str
     label: str
     description: str
+    score: int
 
 
 class ScoringDimensionRead(BaseModel):

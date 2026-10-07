@@ -9,7 +9,7 @@ from sqlalchemy import CheckConstraint, Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
-from app.core.deal_scoring import score_summary, total_score
+from app.core.deal_scoring import priority as priority_for, score_summary, total_score
 from app.db.base import Base
 from app.models.enums import LeadTier
 
@@ -108,3 +108,7 @@ class Deal(Base):
     @property
     def proposal_sla(self) -> str | None:
         return score_summary(self.total_score)[1]
+
+    @property
+    def priority(self) -> str | None:
+        return priority_for(self.total_score)

@@ -6,6 +6,7 @@ import pytest
 from app.core.deal_scoring import (
     SCORING_DESCRIPTIONS,
     SCORING_DIMENSIONS,
+    priority,
     score_summary,
     total_score,
 )
@@ -65,6 +66,16 @@ def test_total_score_ignores_a_dimension_removed_from_the_backend():
 )
 def test_score_summary_thresholds(total, mode, sla):
     assert score_summary(total) == (mode, sla)
+
+
+@pytest.mark.parametrize(
+    ("total", "expected"),
+    [(24, "Very High"), (20, "Very High"), (19, "High"), (14, "High"), (13, "Medium"), (8, "Medium"),
+     (7, "Low"), (1, "Low"), (None, None)],
+)
+def test_priority_follows_the_response_mode_band(total, expected):
+    """Mode A -> Very High, B -> High, C -> Medium, D -> Low; unscored -> None."""
+    assert priority(total) == expected
 
 
 def test_score_summary_is_none_when_unscored():

@@ -1058,6 +1058,7 @@ async def test_list_deals_to_export_returns_valid_xlsx_with_expected_rows(
         "Total Score",
         "Response Mode",
         "Proposal SLA",
+        "Priority",
     ]
     data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
     deal_name_col = header.index("Deal Name")
@@ -1544,7 +1545,7 @@ SCORES_15 = {
 }
 
 
-async def test_scoring_dimensions_lists_labels_levels_and_tooltips_without_scores(
+async def test_scoring_dimensions_lists_labels_levels_tooltips_and_scores(
     client: AsyncClient, make_user, auth_headers
 ):
     rep = await make_user(email="rep-scoring-dims@example.com", role=UserRole.SALES_REP)
@@ -1560,8 +1561,10 @@ async def test_scoring_dimensions_lists_labels_levels_and_tooltips_without_score
         "key": "confirmed_above_20l",
         "label": "Confirmed above ₹20L",
         "description": "Budget stated explicitly, approved, and above ₹20L / $25K. Or a defined monthly retainer.",
+        "score": 3,
     }
-    assert "score" not in response.text
+    # Per-level points drive the deal page's Qualification card (1/2/3 dots).
+    assert [level["score"] for level in budget["levels"]] == [1, 2, 3]
 
 
 async def test_create_deal_with_scores_returns_total_mode_and_sla(
@@ -1583,6 +1586,7 @@ async def test_create_deal_with_scores_returns_total_mode_and_sla(
     assert body["total_score"] == 15
     assert body["response_mode"] == "Mode B — Build Case"
     assert body["proposal_sla"] == "48 Hrs + Discovery"
+    assert body["priority"] == "High"
 
 
 async def test_create_deal_without_scores_returns_nulls(
@@ -1599,9 +1603,9 @@ async def test_create_deal_without_scores_returns_nulls(
     )
 
     body = response.json()
-    assert (body["scores"], body["total_score"], body["response_mode"], body["proposal_sla"]) == (
-        None, None, None, None,
-    )
+    assert (
+        body["scores"], body["total_score"], body["response_mode"], body["proposal_sla"], body["priority"]
+    ) == (None, None, None, None, None)
 
 
 async def test_create_deal_rejects_partial_unknown_or_invalid_scores(
@@ -1658,14 +1662,14 @@ async def test_list_deals_to_export_writes_scoring_columns(
     sheet = openpyxl.load_workbook(io.BytesIO(response.content)).active
     name_col = len(TRACKER_COLUMNS)  # "Deal Name" follows the tracker columns
     rows = {row[name_col]: row for row in sheet.iter_rows(min_row=2, values_only=True)}
-    # The last 11 columns: 8 level labels, then total / mode / SLA.
-    assert rows["Scored Export"][-11:] == (
+    # The last 12 columns: 8 level labels, then total / mode / SLA / priority.
+    assert rows["Scored Export"][-12:] == (
         "Acute", "Indicative / in range", "Start in 30–90 days", "Champion",
         "Moderate (3–6 weeks)", "Moderate fit", "Cold", "Low ceiling",
-        15, "Mode B — Build Case", "48 Hrs + Discovery",
+        15, "Mode B — Build Case", "48 Hrs + Discovery", "High",
     )
-    assert rows["Unscored Export"][-11:] == (None,) * 11
-    assert rows["Scored Export"][-11:][-2] == "Mode B — Build Case"  # row is a full row, not truncated
+    assert rows["Unscored Export"][-12:] == (None,) * 12
+    assert rows["Scored Export"][-12:][-3] == "Mode B — Build Case"  # row is a full row, not truncated
 
 
 async def test_get_deal_to_export_deal_sheet_includes_scoring(
@@ -1685,6 +1689,7 @@ async def test_get_deal_to_export_deal_sheet_includes_scoring(
     assert fields["Total Score"] == 15
     assert fields["Response Mode"] == "Mode B — Build Case"
     assert fields["Proposal SLA"] == "48 Hrs + Discovery"
+    assert fields["Priority"] == "High"
 
 
 async def _deal_ctx(make_user, make_account, make_deal_stage, tag):

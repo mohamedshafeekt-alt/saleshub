@@ -301,8 +301,10 @@ async def list_scoring_dimensions_route() -> list[ScoringDimensionRead]:
             key=dim,
             label=spec["label"],
             levels=[
-                ScoringLevelRead(key=level, label=label, description=SCORING_DESCRIPTIONS[dim][level])
-                for level, (label, _score) in spec["levels"].items()
+                ScoringLevelRead(
+                    key=level, label=label, description=SCORING_DESCRIPTIONS[dim][level], score=score
+                )
+                for level, (label, score) in spec["levels"].items()
             ],
         )
         for dim, spec in SCORING_DIMENSIONS.items()

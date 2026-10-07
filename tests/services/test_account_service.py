@@ -24,7 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.contact import Contact
 from app.models.contact_account import ContactAccount
-from app.models.enums import LeadTier, NotificationType
+from app.models.enums import LeadSource, LeadTier, NotificationType
 from app.models.lead_contact import LeadContact
 from app.models.user import User
 from app.schemas.account import AccountContactInput, AccountCreate, AccountUpdate
@@ -702,12 +702,14 @@ async def test_convert_lead_to_account_copies_fields_and_sets_source_lead_id(
         company="Convert Co",
         domain="convert.example.com",
         linkedin_url="https://linkedin.com/company/convert-co",
+        source=LeadSource.REFERRAL,
     )
 
     account = await convert_lead_to_account(
         db_session, lead_id=lead.id, requester=owner, tier=LeadTier.GOLD
     )
 
+    assert account.source == LeadSource.REFERRAL
     assert account.company == "Convert Co"
     assert account.domain == "convert.example.com"
     assert account.tier == LeadTier.GOLD
