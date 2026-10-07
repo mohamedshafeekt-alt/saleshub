@@ -3,6 +3,7 @@
 from app.models.account import Account
 from app.models.account_activity import AccountActivity
 from app.models.account_document import AccountDocument
+from app.models.account_source_member import AccountSourceMember
 from app.models.audit_log import AuditLog
 from app.models.company import Company
 from app.models.contact import Contact
@@ -27,6 +28,7 @@ __all__ = [
     "Account",
     "AccountActivity",
     "AccountDocument",
+    "AccountSourceMember",
     "AuditLog",
     "Company",
     "Contact",

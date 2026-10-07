@@ -2,10 +2,10 @@
 stages (dynamic `DealStage` rows, not a fixed enum -- see
 app/models/deal_stage.py)."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Enum, ForeignKey
+from sqlalchemy import CheckConstraint, Enum, ForeignKey
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -15,6 +15,7 @@ from app.models.enums import LeadTier
 
 if TYPE_CHECKING:
     from app.models.account import Account
+    from app.models.contact import Contact
     from app.models.deal_stage import DealStage
     from app.models.user import User
 
@@ -23,6 +24,11 @@ __all__ = ["Deal"]
 
 class Deal(Base):
     __tablename__ = "deals"
+    __table_args__ = (
+        CheckConstraint(
+            "originator_user_id IS NULL OR originator_contact_id IS NULL", name="ck_deals_one_originator"
+        ),
+    )
 
     deal_name: Mapped[str] = mapped_column(nullable=False)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id"), nullable=False, index=True)
@@ -38,6 +44,17 @@ class Deal(Base):
     # D1–D8 level keys, {"D1": "mild", ...}; see app/core/deal_scoring.py.
     scores: Mapped[dict[str, str] | None] = mapped_column(JSONB(none_as_null=True), nullable=True)
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    follow_up_date: Mapped[date | None] = mapped_column(nullable=True, index=True)
+    # At most one of these: a platform User, or a Contact with is_originator.
+    originator_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    originator_contact_id: Mapped[int | None] = mapped_column(ForeignKey("contacts.id"), nullable=True)
+    # "not_sent" | "proposal_sent"; proposal_sent_at is set with the latter.
+    proposal_status: Mapped[str] = mapped_column(nullable=False, default="not_sent", server_default="not_sent")
+    proposal_sent_at: Mapped[date | None] = mapped_column(nullable=True)
+    # created_at + the scored mode's SLA hours; stored (not derived on read)
+    # so the dashboard can filter "past SLA" in SQL. Kept in step with
+    # `scores` by create_deal/update_deal.
+    proposal_sla_due_at: Mapped[datetime | None] = mapped_column(nullable=True, index=True)
 
     # Eager (joined) so DealRead's account_name/owner_name/stage_name/
     # stage_is_cold are always populated without an N+1 per deal -- same
@@ -47,6 +64,22 @@ class Deal(Base):
     )
     stage: Mapped["DealStage"] = relationship("DealStage", lazy="joined", foreign_keys=[stage_id])
     owner: Mapped["User"] = relationship("User", lazy="joined", foreign_keys=[owner_id])
+    originator_user: Mapped["User | None"] = relationship(
+        "User", lazy="joined", foreign_keys=[originator_user_id]
+    )
+    originator_contact: Mapped["Contact | None"] = relationship(
+        "Contact", lazy="joined", foreign_keys=[originator_contact_id]
+    )
+
+    @property
+    def originator(self) -> dict[str, object] | None:
+        if self.originator_user is not None:
+            u = self.originator_user
+            return {"type": "user", "id": u.id, "name": " ".join(filter(None, [u.first_name, u.last_name]))}
+        if self.originator_contact is not None:
+            c = self.originator_contact
+            return {"type": "contact", "id": c.id, "name": " ".join(filter(None, [c.first_name, c.last_name]))}
+        return None
 
     @property
     def account_name(self) -> str:

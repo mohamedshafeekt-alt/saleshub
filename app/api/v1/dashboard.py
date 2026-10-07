@@ -9,8 +9,9 @@ from app.core.permission_codes import DASHBOARD_VIEW
 from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.user import User
-from app.schemas.dashboard import DashboardOverviewResponse
+from app.schemas.dashboard import DashboardDealTiles, DashboardOverviewResponse
 from app.services import dashboard_service
+from app.services.deal_service import count_quick_filters
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -34,6 +35,7 @@ async def get_dashboard_route(
     # ponytail: sequential, not asyncio.gather — a single AsyncSession can't run concurrent queries
     return DashboardOverviewResponse(
         summary=await dashboard_service.get_summary(db, period=period, start_date=start_date, end_date=end_date),
+        deal_tiles=DashboardDealTiles(**await count_quick_filters(db, requester=current_user)),
         funnel=await dashboard_service.get_funnel(db, period=period, start_date=start_date, end_date=end_date),
         deal_distribution=await dashboard_service.get_deal_distribution(
             db, period=period, start_date=start_date, end_date=end_date

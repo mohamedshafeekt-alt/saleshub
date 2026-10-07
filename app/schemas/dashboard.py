@@ -19,6 +19,17 @@ class DashboardSummary(BaseModel):
     num_accounts: DashboardTile
 
 
+class DashboardDealTiles(BaseModel):
+    """Live open-deal counts (ignore the period selector); each equals
+    GET /deals?quick_filter=<same name>'s total."""
+
+    in_view: int
+    very_high: int
+    overdue: int
+    due_today: int
+    past_sla: int
+
+
 class FunnelStage(BaseModel):
     stage_name: str
     count: int
@@ -91,6 +102,7 @@ class ActivityFeedResponse(BaseModel):
 
 class DashboardOverviewResponse(BaseModel):
     summary: DashboardSummary
+    deal_tiles: DashboardDealTiles
     funnel: FunnelResponse
     deal_distribution: DealDistributionResponse
     leaderboard: LeaderboardResponse

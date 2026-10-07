@@ -47,6 +47,7 @@ async def create_account_contact(
         email=data.email,
         phone=data.phone,
         alternate_phone=data.alternate_phone,
+        is_originator=data.is_originator or False,
     )
     db.add(contact)
     try:

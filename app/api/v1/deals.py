@@ -8,13 +8,14 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deal_scoring import SCORING_DESCRIPTIONS, SCORING_DIMENSIONS, scoring_export_fields
+from app.core.deal_scoring import SCORING_DESCRIPTIONS, SCORING_DIMENSIONS
 from app.core.deps import get_current_user
 from app.core.permission_codes import DEALS_ACCESS
 from app.core.rbac import tag_router_permissions
 from app.db.session import get_db
 from app.models.enums import DealActivityType, LeadTier
 from app.models.user import User
+from app.schemas.account_source import SourcePersonRead
 from app.schemas.deal import (
     DealBoardColumn,
     DealContactRead,
@@ -54,7 +55,11 @@ from app.services.deal_service import (
     DealAccessForbiddenError,
     DealNotFoundError,
     DealStageNotFoundError,
+    InvalidOriginatorError,
+    QuickFilter,
+    EXPORT_HEADERS,
     create_deal,
+    deal_export_rows,
     delete_deal,
     export_deals,
     get_deal,
@@ -62,6 +67,7 @@ from app.services.deal_service import (
     get_deal_contact_ids_by_deal,
     list_deals,
     list_deals_board,
+    list_originator_options,
     list_stage_history,
     update_deal,
 )
@@ -103,6 +109,8 @@ async def create_deal_route(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InvalidOriginatorError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     await db.commit()
     contact_ids = await get_deal_contact_ids(db, deal.id)
@@ -165,6 +173,13 @@ async def list_deals_route(
             "stage_id to drill down into a tile. Both bounds inclusive."
         ),
     ),
+    quick_filter: QuickFilter | None = Query(
+        None,
+        description=(
+            "Dashboard deal tile drill-down: open deals narrowed by in_view / very_high (Mode A, 20+) / "
+            "overdue / due_today (follow-up date) / past_sla (proposal due, not yet sent)."
+        ),
+    ),
     stage_state: Literal["all", "open", "closed"] = Query(
         "all",
         description=(
@@ -198,22 +213,13 @@ async def list_deals_route(
             date_to=date_to,
             date_field=date_field,
             stage_state=stage_state,
+            quick_filter=quick_filter,
         )
         buffer = rows_to_xlsx(
-            [
-                "Deal Name", "Account", "Contact", "Value", "Currency",
-                "Stage", "Tier", "Owner", "Expected Close Date", "Cold Reason",
-                *scoring_export_fields(None),
-            ],
-            [
-                [
-                    row["deal_name"], row["account"], row["contact"], row["value"], row["currency"],
-                    row["stage"], row["tier"], row["owner"], row["expected_close_date"], row["cold_reason"],
-                    *row["scoring"].values(),
-                ]
-                for row in rows
-            ],
+            EXPORT_HEADERS,
+            [list(row.values()) for row in rows],
             sheet_name="Deals",
+            styled=True,
         )
         return StreamingResponse(
             buffer,
@@ -231,6 +237,7 @@ async def list_deals_route(
             tier=tier,
             search=search,
             stage_state=stage_state,
+            quick_filter=quick_filter,
             sort_by=sort_by,
             sort_dir=sort_dir,
         )
@@ -261,6 +268,7 @@ async def list_deals_route(
         date_to=date_to,
         date_field=date_field,
         stage_state=stage_state,
+        quick_filter=quick_filter,
         sort_by=sort_by,
         sort_dir=sort_dir,
         limit=limit,
@@ -274,6 +282,15 @@ async def list_deals_route(
         limit=limit,
         offset=offset,
     )
+
+
+# Registered before /{deal_id} so "originator-options" isn't parsed as an id.
+@router.get("/originator-options", response_model=list[SourcePersonRead])
+async def originator_options_route(
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[SourcePersonRead]:
+    return await list_originator_options(db)
 
 
 # Registered before /{deal_id} so "scoring-dimensions" isn't parsed as an id.
@@ -311,20 +328,7 @@ async def get_deal_route(
     if not to_export:
         return deal_read
 
-    deal_fields = {
-        "ID": deal_read.id,
-        "Deal Name": deal_read.deal_name,
-        "Account": deal_read.account_name,
-        "Contacts": ", ".join(contact.name for contact in deal_read.contacts),
-        "Value": deal_read.value,
-        "Currency": deal_read.currency,
-        "Expected Close Date": deal_read.expected_close_date,
-        "Stage": deal_read.stage_name,
-        "Tier": deal_read.tier.value if deal_read.tier else None,
-        "Cold Reason": deal_read.cold_reason,
-        "Owner": deal_read.owner_name,
-        **scoring_export_fields(deal_read.scores),
-    }
+    deal_fields = (await deal_export_rows(db, [deal]))[0]
     history = await list_stage_history(db, deal_id, requester=current_user)
     history_rows = [
         [row.from_stage_name, row.to_stage_name, row.changed_by, row.note, row.created_at]
@@ -366,6 +370,8 @@ async def update_deal_route(
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     except ContactNotFoundError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except InvalidOriginatorError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
 
     await db.commit()
     contact_ids = await get_deal_contact_ids(db, deal.id)

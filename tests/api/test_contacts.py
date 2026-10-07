@@ -577,3 +577,52 @@ async def test_upload_contact_import_rejects_corrupt_xlsx_content(client: AsyncC
     )
 
     assert response.status_code == 400
+
+
+async def test_contact_is_originator_defaults_false_and_can_be_set_and_patched(
+    client: AsyncClient, make_user, auth_headers
+):
+    admin = await make_user(email="admin-originator@example.com", role=UserRole.ADMIN)
+    headers = auth_headers(admin)
+
+    default = await client.post(
+        "/api/v1/contacts", json={"first_name": "No", "email": "no-orig@example.com"}, headers=headers
+    )
+    assert default.status_code == 201
+    assert default.json()["is_originator"] is False
+
+    flagged = await client.post(
+        "/api/v1/contacts",
+        json={"first_name": "TT", "email": "tt-orig@example.com", "is_originator": True},
+        headers=headers,
+    )
+    assert flagged.json()["is_originator"] is True
+
+    patched = await client.patch(
+        f"/api/v1/contacts/{default.json()['id']}", json={"is_originator": True}, headers=headers
+    )
+    assert patched.json()["is_originator"] is True
+
+
+async def test_account_contact_upsert_sets_and_updates_is_originator(
+    client: AsyncClient, make_user, auth_headers, make_account
+):
+    rep = await make_user(email="rep-upsert-orig@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Upsert Orig Co")
+    headers = auth_headers(rep)
+    url = f"/api/v1/accounts/{account.id}/contacts"
+
+    created = await client.post(
+        url, json={"first_name": "TT", "email": "tt-upsert@example.com", "is_originator": True}, headers=headers
+    )
+    assert created.status_code == 201
+    assert created.json()["is_originator"] is True
+
+    updated = await client.post(
+        url, json={"contact_id": created.json()["id"], "is_originator": False}, headers=headers
+    )
+    assert updated.status_code == 200
+    assert updated.json()["is_originator"] is False
+
+    null = await client.post(url, json={"contact_id": created.json()["id"], "is_originator": None}, headers=headers)
+    assert null.status_code == 422

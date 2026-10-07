@@ -111,6 +111,11 @@ read/unread, mark-all/bulk-read, bulk soft-delete) — populated on new-lead cre
 - [x] Activity log for Account (Lead's and Deal's are done; Account's is still open)
 - [x] Dashboard aggregation endpoints (tentative fidgets for now)
 - [x] D1–D8 deal scoring (BANT/MEDDIC/CHAMP): `GET /api/v1/deals/scoring-dimensions` serves dimensions, levels and tooltips from `app/core/deal_scoring.py`; deals take all-or-nothing `scores` on create/update and return computed `total_score`, `response_mode`, `proposal_sla` (Lead Tracker thresholds); both xlsx exports (list + single-deal) carry each dimension's level plus total / mode / SLA
+- [x] Lead Tracker fields: accounts carry `source` (same values as lead source), `country` and `engagement_type` (options from `GET /api/v1/accounts/options`); contacts carry `is_originator`
+- [x] Account Source Detail: ordered chain of Users/Contacts (`GET`/`PUT /api/v1/accounts/{id}/source-detail`, picker list at `GET /api/v1/accounts/source-detail/people`); no duplicates, 0 or more people
+- [x] Deal `follow_up_date`, `originator` (User or `is_originator` Contact, options at `GET /api/v1/deals/originator-options`), `proposal_status` (not_sent / proposal_sent, with `proposal_sent_at`) and stored `proposal_sla_due_at` (received time + mode hours, kept in step with `scores`)
+- [x] Deal exports (list + single) lead with the Lead Tracker columns (ID, Date Received, Source, Source Detail, Company, primary Contact name/designation/email/phone, Stage, latest activity as Comment, Industry, Country, Engagement Type), then the app's own columns, follow-up/originator/proposal columns and scoring
+- [x] Dashboard deal tiles (`deal_tiles` on `GET /api/v1/dashboard`: In view, Very high, Overdue, Due today, Past SLA) with matching drill-down `GET /api/v1/deals?quick_filter=...` (same predicate, so counts equal list totals)
 - [ ] Static Pre-Sales Checklist per deal
 
 ## Milestones (per Phase 1 kickoff)

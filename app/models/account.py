@@ -5,8 +5,9 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Enum, ForeignKey
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
+from app.core.account_options import ENGAGEMENT_TYPES
 from app.db.base import Base
-from app.models.enums import LeadTier
+from app.models.enums import LeadSource, LeadTier
 
 if TYPE_CHECKING:
     from app.models.contact_account import ContactAccount
@@ -29,6 +30,15 @@ class Account(Base):
     owner_id: Mapped[int] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
     source_lead_id: Mapped[int | None] = mapped_column(ForeignKey("leads.id"), nullable=True)
     industry: Mapped[str | None] = mapped_column(nullable=True)
+    # Same value list as Lead.source (shared Postgres enum); country is a
+    # name from app.core.account_options.COUNTRIES, engagement_type one of
+    # its ENGAGEMENT_TYPES keys.
+    source: Mapped[LeadSource | None] = mapped_column(
+        Enum(LeadSource, name="lead_source", values_callable=lambda enum_cls: [m.value for m in enum_cls]),
+        nullable=True,
+    )
+    country: Mapped[str | None] = mapped_column(nullable=True)
+    engagement_type: Mapped[str | None] = mapped_column(nullable=True)
     city: Mapped[str | None] = mapped_column(nullable=True)
     description: Mapped[str | None] = mapped_column(nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(nullable=True)
@@ -48,6 +58,10 @@ class Account(Base):
         "ContactAccount", order_by="ContactAccount.id", passive_deletes="all"
     )
     deals: Mapped[list["Deal"]] = relationship("Deal", order_by="Deal.id")
+
+    @property
+    def engagement_type_label(self) -> str | None:
+        return ENGAGEMENT_TYPES.get(self.engagement_type) if self.engagement_type else None
 
     @property
     def owner_name(self) -> str:

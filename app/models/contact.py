@@ -29,6 +29,8 @@ class Contact(Base):
     alternate_phone: Mapped[str | None] = mapped_column(nullable=True)
     job_title: Mapped[str | None] = mapped_column(nullable=True)
     linkedin_url: Mapped[str | None] = mapped_column(nullable=True)
+    # Eligible for the Deal "Originator" dropdown.
+    is_originator: Mapped[bool] = mapped_column(nullable=False, default=False, server_default="false")
 
     # passive_deletes: the FK's ON DELETE CASCADE handles removing these rows
     # in the database -- without this, SQLAlchemy instead tries to UPDATE

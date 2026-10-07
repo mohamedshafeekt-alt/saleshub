@@ -30,8 +30,16 @@ class AccountContactUpsert(BaseModel):
     phone: str | None = None
     alternate_phone: str | None = None
     is_primary: bool | None = None
+    is_originator: bool | None = None
 
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
+
+    @field_validator("is_originator")
+    @classmethod
+    def _is_originator_not_null(cls, value: bool | None) -> bool | None:
+        if value is None:
+            raise ValueError("is_originator cannot be null")
+        return value
 
     @model_validator(mode="after")
     def _first_name_and_email_required_when_creating(self) -> "AccountContactUpsert":
@@ -57,4 +65,5 @@ class AccountContactRead(ORMBase):
     alternate_phone: str | None
     job_title: str | None
     linkedin_url: str | None
+    is_originator: bool
     is_primary: bool

@@ -1314,3 +1314,63 @@ async def test_list_and_delete_account_documents(
 
     list_after_delete = await client.get(f"{ACCOUNTS_URL}/{account.id}/documents", headers=headers)
     assert list_after_delete.json() == []
+
+
+async def test_account_options_lists_countries_and_engagement_types(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-acc-options@example.com", role=UserRole.SALES_REP)
+
+    response = await client.get(f"{ACCOUNTS_URL}/options", headers=auth_headers(rep))
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "India" in body["countries"]
+    assert {"key": "retainer_monthly", "label": "Retainer — Monthly"} in body["engagement_types"]
+
+
+async def test_create_and_patch_account_source_country_engagement_type(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-acc-sce@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    created = await client.post(
+        ACCOUNTS_URL,
+        json=_account_payload(
+            owner_id=rep.id, source="referral", country="India", engagement_type="proof_of_concept"
+        ),
+        headers=headers,
+    )
+    assert created.status_code == 201
+    body = created.json()
+    assert (body["source"], body["country"], body["engagement_type"]) == ("referral", "India", "proof_of_concept")
+    assert body["engagement_type_label"] == "Proof of Concept"
+
+    patched = await client.patch(
+        f"{ACCOUNTS_URL}/{body['id']}", json={"country": "Canada", "source": "linkedin"}, headers=headers
+    )
+    assert patched.status_code == 200
+    assert patched.json()["country"] == "Canada"
+    assert patched.json()["source"] == "linkedin"
+    assert patched.json()["engagement_type"] == "proof_of_concept"
+
+
+async def test_account_rejects_unknown_country_engagement_type_or_source(
+    client: AsyncClient, make_user, auth_headers
+):
+    rep = await make_user(email="rep-acc-sce-bad@example.com", role=UserRole.SALES_REP)
+    headers = auth_headers(rep)
+
+    for bad in ({"country": "Narnia"}, {"engagement_type": "nope"}, {"source": "nope"}):
+        response = await client.post(ACCOUNTS_URL, json=_account_payload(owner_id=rep.id, **bad), headers=headers)
+        assert response.status_code == 422, bad
+
+
+async def test_account_without_new_fields_returns_nulls(client: AsyncClient, make_user, auth_headers):
+    rep = await make_user(email="rep-acc-sce-null@example.com", role=UserRole.SALES_REP)
+
+    response = await client.post(
+        ACCOUNTS_URL, json=_account_payload(owner_id=rep.id), headers=auth_headers(rep)
+    )
+
+    body = response.json()
+    assert (body["source"], body["country"], body["engagement_type"]) == (None, None, None)

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, Response, Up
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.account_options import COUNTRIES, ENGAGEMENT_TYPES
 from app.core.deps import get_current_user
 from app.core.permission_codes import ACCOUNTS_ACCESS
 from app.core.rbac import tag_router_permissions
@@ -21,6 +22,7 @@ from app.schemas.account_activity import (
     AccountActivityUpdate,
 )
 from app.schemas.account_document import AccountDocumentRead
+from app.schemas.account_source import SourceDetailUpdate, SourcePersonRead
 from app.schemas.contact_account import AccountContactRead, AccountContactUpsert
 from app.schemas.deal import DealRead
 from app.schemas.generic_response import Page
@@ -36,6 +38,12 @@ from app.services.account_document_service import (
     delete_account_document,
     list_account_documents,
     upload_account_document,
+)
+from app.services.account_source_service import (
+    UnknownSourcePersonError,
+    list_people,
+    list_source_detail,
+    replace_source_detail,
 )
 from app.services.account_service import (
     AccountAccessForbiddenError,
@@ -75,6 +83,7 @@ def _to_account_contact_read(contact: Contact, is_primary: bool) -> AccountConta
         alternate_phone=contact.alternate_phone,
         job_title=contact.job_title,
         linkedin_url=contact.linkedin_url,
+        is_originator=contact.is_originator,
         is_primary=is_primary,
     )
 
@@ -94,6 +103,24 @@ async def create_account_route(
 
     await db.commit()
     return AccountRead.model_validate(account)
+
+
+# Registered before /{account_id} so "options" isn't parsed as an id.
+@router.get("/options")
+async def account_options_route(_: User = Depends(get_current_user)) -> dict:
+    return {
+        "countries": COUNTRIES,
+        "engagement_types": [{"key": k, "label": v} for k, v in ENGAGEMENT_TYPES.items()],
+    }
+
+
+@router.get("/source-detail/people", response_model=list[SourcePersonRead])
+async def source_detail_people_route(
+    search: str | None = Query(None),
+    _: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[SourcePersonRead]:
+    return await list_people(db, search)
 
 
 @router.get("", response_model=Page[AccountRead])
@@ -237,6 +264,10 @@ async def get_account_overview_route(
         owner_name=account.owner_name,
         industry=account.industry,
         city=account.city,
+        source=account.source,
+        country=account.country,
+        engagement_type=account.engagement_type,
+        engagement_type_label=account.engagement_type_label,
         description=account.description,
         linkedin_url=account.linkedin_url,
         open_deal_value=open_deal_value,
@@ -503,6 +534,39 @@ async def delete_account_document_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
 
     await db.commit()
+
+
+@router.get("/{account_id}/source-detail", response_model=list[SourcePersonRead])
+async def get_source_detail_route(
+    account_id: int,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[SourcePersonRead]:
+    try:
+        return await list_source_detail(db, account_id, current_user)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+
+@router.put("/{account_id}/source-detail", response_model=list[SourcePersonRead])
+async def put_source_detail_route(
+    account_id: int,
+    data: SourceDetailUpdate,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> list[SourcePersonRead]:
+    try:
+        result = await replace_source_detail(db, account_id, data.members, current_user)
+    except AccountNotFoundError as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except AccountAccessForbiddenError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except UnknownSourcePersonError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    await db.commit()
+    return result
 
 
 tag_router_permissions(router, ACCOUNTS_ACCESS)

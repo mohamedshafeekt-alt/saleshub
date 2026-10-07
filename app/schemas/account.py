@@ -1,12 +1,19 @@
 """Account request/response schemas."""
 
-from pydantic import BaseModel, EmailStr, field_validator, model_validator
+from typing import Annotated
+
+from pydantic import AfterValidator, BaseModel, EmailStr, field_validator, model_validator
 from app.schemas.base import ORMBase
 
-from app.models.enums import LeadTier
+from app.core.account_options import validate_country, validate_engagement_type
+from app.models.enums import LeadSource, LeadTier
 from app.schemas.contact_account import AccountContactRead
 from app.schemas.deal import DealRead
 from app.schemas.validators import validate_linkedin_url
+
+
+Country = Annotated[str | None, AfterValidator(validate_country)]
+EngagementType = Annotated[str | None, AfterValidator(validate_engagement_type)]
 
 
 class AccountContactInput(BaseModel):
@@ -38,6 +45,9 @@ class AccountCreate(BaseModel):
     owner_id: int | None = None
     industry: str | None = None
     city: str | None = None
+    source: LeadSource | None = None
+    country: Country = None
+    engagement_type: EngagementType = None
     description: str | None = None
     linkedin_url: str | None = None
     contacts: list[AccountContactInput] = []
@@ -58,6 +68,9 @@ class AccountUpdate(BaseModel):
     owner_id: int | None = None
     industry: str | None = None
     city: str | None = None
+    source: LeadSource | None = None
+    country: Country = None
+    engagement_type: EngagementType = None
     description: str | None = None
     linkedin_url: str | None = None
     # Appends to the account's existing contacts -- never replaces or edits
@@ -85,6 +98,10 @@ class AccountRead(ORMBase):
     source_lead_id: int | None
     industry: str | None
     city: str | None
+    source: LeadSource | None
+    country: str | None
+    engagement_type: str | None
+    engagement_type_label: str | None
     description: str | None
     linkedin_url: str | None
     contact_count: int
@@ -108,6 +125,10 @@ class AccountOverviewRead(BaseModel):
     owner_name: str
     industry: str | None
     city: str | None
+    source: LeadSource | None
+    country: str | None
+    engagement_type: str | None
+    engagement_type_label: str | None
     description: str | None
     linkedin_url: str | None
     open_deal_value: float

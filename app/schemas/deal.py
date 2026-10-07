@@ -8,9 +8,11 @@ from app.schemas.base import ORMBase
 
 from app.core.deal_scoring import validate_scores
 from app.models.enums import LeadTier
+from app.schemas.account_source import SourcePersonRef
 
 # D1–D8 level keys; all-or-nothing, see app/core/deal_scoring.py.
 DealScores = Annotated[dict[str, str] | None, AfterValidator(validate_scores)]
+ProposalStatus = Literal["not_sent", "proposal_sent"]
 
 
 class DealCreate(BaseModel):
@@ -27,6 +29,8 @@ class DealCreate(BaseModel):
     owner_id: int
     cold_reason: str | None = None
     scores: DealScores = None
+    follow_up_date: date | None = None
+    originator: SourcePersonRef | None = None
 
 
 class DealUpdate(BaseModel):
@@ -42,6 +46,13 @@ class DealUpdate(BaseModel):
     cold_reason: str | None = None
     # Explicit null clears the scoring.
     scores: DealScores = None
+    # Explicit null clears (follow_up_date, originator).
+    follow_up_date: date | None = None
+    originator: SourcePersonRef | None = None
+    # Server-managed date: set to today on proposal_sent unless given;
+    # cleared on not_sent.
+    proposal_status: ProposalStatus | None = None
+    proposal_sent_at: date | None = None
     # Write-only input for the stage-history row's note. Never a column on
     # Deal -- must not be setattr'd onto the ORM object.
     note: str | None = None
@@ -52,6 +63,12 @@ class DealContactRead(BaseModel):
     name: str
     email: str
     phone: str | None
+
+
+class OriginatorRead(BaseModel):
+    type: Literal["user", "contact"]
+    id: int
+    name: str
 
 
 class DealRead(ORMBase):
@@ -75,6 +92,12 @@ class DealRead(ORMBase):
     total_score: int | None
     response_mode: str | None
     proposal_sla: str | None
+    created_at: datetime
+    follow_up_date: date | None
+    originator: OriginatorRead | None
+    proposal_status: ProposalStatus
+    proposal_sent_at: date | None
+    proposal_sla_due_at: datetime | None
 
 
 class ScoringLevelRead(BaseModel):

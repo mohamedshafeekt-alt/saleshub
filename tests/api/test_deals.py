@@ -18,10 +18,16 @@ Deal Documents (upload/list/delete under /deals/{id}/documents).
 import openpyxl
 from httpx import AsyncClient
 
-from app.models.enums import LeadTier
+from app.models.enums import LeadSource, LeadTier
 from tests.support.roles import UserRole
 
 DEALS_URL = "/api/v1/deals"
+
+# The Lead Tracker sheet's columns that lead every deal export.
+TRACKER_COLUMNS = [
+    "ID", "Date Received", "Source", "Source Detail", "Company Name", "Contact Name", "Designation",
+    "Stage", "Comment", "Email", "Phone/WhatsApp", "Industry/Vertical", "Country/Region", "Engagement Type",
+]
 
 
 def _deal_payload(**overrides) -> dict:
@@ -1027,16 +1033,20 @@ async def test_list_deals_to_export_returns_valid_xlsx_with_expected_rows(
     sheet = workbook.active
     header = [cell.value for cell in next(sheet.iter_rows(min_row=1, max_row=1))]
     assert header == [
+        *TRACKER_COLUMNS,
         "Deal Name",
-        "Account",
-        "Contact",
+        "All Contacts",
         "Value",
         "Currency",
-        "Stage",
         "Tier",
         "Owner",
         "Expected Close Date",
         "Cold Reason",
+        "Follow-up Date",
+        "Originator",
+        "Proposal Status",
+        "Proposal Sent Date",
+        "Proposal SLA Due Date",
         "Pain Intensity (CHAMP)",
         "Budget (BANT)",
         "Urgency / Timeline (BANT)",
@@ -1050,7 +1060,8 @@ async def test_list_deals_to_export_returns_valid_xlsx_with_expected_rows(
         "Proposal SLA",
     ]
     data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
-    assert any(row[0] == "Export Xlsx Deal" for row in data_rows)
+    deal_name_col = header.index("Deal Name")
+    assert any(row[deal_name_col] == "Export Xlsx Deal" for row in data_rows)
 
 
 async def test_deals_export_route_no_longer_exists(client: AsyncClient, make_user, auth_headers):
@@ -1080,7 +1091,7 @@ async def test_list_deals_to_export_filters_by_owner_id(
 
     workbook = openpyxl.load_workbook(io.BytesIO(response.content))
     data_rows = list(workbook.active.iter_rows(min_row=2, values_only=True))
-    names = {row[0] for row in data_rows}
+    names = {row[len(TRACKER_COLUMNS)] for row in data_rows}
     assert names == {"Owner A Deal"}
 
 
@@ -1101,7 +1112,7 @@ async def test_list_deals_to_export_scopes_to_requester_for_non_view_all_role(
     workbook = openpyxl.load_workbook(io.BytesIO(response.content))
     sheet = workbook.active
     data_rows = list(sheet.iter_rows(min_row=2, values_only=True))
-    names = {row[0] for row in data_rows}
+    names = {row[len(TRACKER_COLUMNS)] for row in data_rows}
     assert names == {"Own Export Xlsx Deal"}
 
 
@@ -1644,16 +1655,17 @@ async def test_list_deals_to_export_writes_scoring_columns(
 
     response = await client.get(DEALS_URL, params={"to_export": "true"}, headers=auth_headers(rep))
 
-    rows = {row[0]: row for row in openpyxl.load_workbook(io.BytesIO(response.content)).active.iter_rows(
-        min_row=2, values_only=True
-    )}
-    # Columns after "Cold Reason": 8 level labels, then total / mode / SLA.
-    assert rows["Scored Export"][10:] == (
+    sheet = openpyxl.load_workbook(io.BytesIO(response.content)).active
+    name_col = len(TRACKER_COLUMNS)  # "Deal Name" follows the tracker columns
+    rows = {row[name_col]: row for row in sheet.iter_rows(min_row=2, values_only=True)}
+    # The last 11 columns: 8 level labels, then total / mode / SLA.
+    assert rows["Scored Export"][-11:] == (
         "Acute", "Indicative / in range", "Start in 30–90 days", "Champion",
         "Moderate (3–6 weeks)", "Moderate fit", "Cold", "Low ceiling",
         15, "Mode B — Build Case", "48 Hrs + Discovery",
     )
-    assert rows["Unscored Export"][10:] == (None,) * 11
+    assert rows["Unscored Export"][-11:] == (None,) * 11
+    assert rows["Scored Export"][-11:][-2] == "Mode B — Build Case"  # row is a full row, not truncated
 
 
 async def test_get_deal_to_export_deal_sheet_includes_scoring(
@@ -1673,3 +1685,295 @@ async def test_get_deal_to_export_deal_sheet_includes_scoring(
     assert fields["Total Score"] == 15
     assert fields["Response Mode"] == "Mode B — Build Case"
     assert fields["Proposal SLA"] == "48 Hrs + Discovery"
+
+
+async def _deal_ctx(make_user, make_account, make_deal_stage, tag):
+    rep = await make_user(email=f"rep-{tag}@example.com", role=UserRole.SALES_REP, first_name="Ram")
+    account = await make_account(owner_id=rep.id, company=f"{tag} Co")
+    stage = await make_deal_stage(name=f"{tag} Stage")
+    return rep, account, stage
+
+
+async def test_deal_new_fields_default_empty(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage
+):
+    rep, account, stage = await _deal_ctx(make_user, make_account, make_deal_stage, "newf-default")
+
+    response = await client.post(
+        DEALS_URL,
+        json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=stage.id),
+        headers=auth_headers(rep),
+    )
+
+    body = response.json()
+    assert body["follow_up_date"] is None
+    assert body["originator"] is None
+    assert body["proposal_status"] == "not_sent"
+    assert body["proposal_sent_at"] is None
+    assert body["proposal_sla_due_at"] is None  # unscored
+
+
+async def test_follow_up_date_is_settable_on_patch_and_clearable(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_deal
+):
+    rep, account, stage = await _deal_ctx(make_user, make_account, make_deal_stage, "followup")
+    deal = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=stage.id)
+    headers = auth_headers(rep)
+
+    set_ = await client.patch(f"{DEALS_URL}/{deal.id}", json={"follow_up_date": "2026-10-20"}, headers=headers)
+    assert set_.status_code == 200
+    assert set_.json()["follow_up_date"] == "2026-10-20"
+
+    cleared = await client.patch(f"{DEALS_URL}/{deal.id}", json={"follow_up_date": None}, headers=headers)
+    assert cleared.json()["follow_up_date"] is None
+
+
+async def test_originator_accepts_a_user_or_an_originator_contact(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_deal, make_contact
+):
+    rep, account, stage = await _deal_ctx(make_user, make_account, make_deal_stage, "orig-ok")
+    tt = await make_contact(account_id=account.id, first_name="TT", last_name="Bhat", is_originator=True)
+    deal = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=stage.id)
+    headers = auth_headers(rep)
+
+    as_user = await client.patch(
+        f"{DEALS_URL}/{deal.id}", json={"originator": {"type": "user", "id": rep.id}}, headers=headers
+    )
+    assert as_user.status_code == 200
+    assert as_user.json()["originator"] == {"type": "user", "id": rep.id, "name": "Ram"}
+
+    as_contact = await client.patch(
+        f"{DEALS_URL}/{deal.id}", json={"originator": {"type": "contact", "id": tt.id}}, headers=headers
+    )
+    assert as_contact.json()["originator"] == {"type": "contact", "id": tt.id, "name": "TT Bhat"}
+
+    cleared = await client.patch(f"{DEALS_URL}/{deal.id}", json={"originator": None}, headers=headers)
+    assert cleared.json()["originator"] is None
+
+    created = await client.post(
+        DEALS_URL,
+        json=_deal_payload(
+            account_id=account.id, owner_id=rep.id, stage_id=stage.id, originator={"type": "contact", "id": tt.id}
+        ),
+        headers=headers,
+    )
+    assert created.status_code == 201
+    assert created.json()["originator"]["name"] == "TT Bhat"
+
+
+async def test_originator_rejects_non_originator_contact_and_unknown_people(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_deal, make_contact
+):
+    rep, account, stage = await _deal_ctx(make_user, make_account, make_deal_stage, "orig-bad")
+    plain = await make_contact(account_id=account.id, first_name="Plain")  # is_originator False
+    deal = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=stage.id)
+    headers = auth_headers(rep)
+
+    for originator in (
+        {"type": "contact", "id": plain.id},
+        {"type": "contact", "id": 999999},
+        {"type": "user", "id": 999999},
+    ):
+        patch = await client.patch(f"{DEALS_URL}/{deal.id}", json={"originator": originator}, headers=headers)
+        assert patch.status_code == 422, originator
+        post = await client.post(
+            DEALS_URL,
+            json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=stage.id, originator=originator),
+            headers=headers,
+        )
+        assert post.status_code == 422, originator
+
+
+async def test_originator_options_lists_users_and_originator_contacts_only(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_contact
+):
+    rep, account, _ = await _deal_ctx(make_user, make_account, make_deal_stage, "orig-opts")
+    flagged = await make_contact(account_id=account.id, first_name="Flagged", is_originator=True, phone="+1 555")
+    plain = await make_contact(account_id=account.id, first_name="Plain")
+
+    options = (await client.get(f"{DEALS_URL}/originator-options", headers=auth_headers(rep))).json()
+
+    keys = {(o["type"], o["id"]) for o in options}
+    assert ("user", rep.id) in keys
+    assert ("contact", flagged.id) in keys
+    assert ("contact", plain.id) not in keys
+    row = next(o for o in options if o["type"] == "contact" and o["id"] == flagged.id)
+    assert row["email"] == flagged.email
+    assert row["phone"] == "+1 555"
+
+
+async def test_proposal_sla_due_at_follows_scores_and_received_time(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage
+):
+    from datetime import datetime, timedelta
+
+    rep, account, stage = await _deal_ctx(make_user, make_account, make_deal_stage, "sla-due")
+    headers = auth_headers(rep)
+
+    created = await client.post(
+        DEALS_URL,
+        json=_deal_payload(account_id=account.id, owner_id=rep.id, stage_id=stage.id, scores=SCORES_15),
+        headers=headers,
+    )
+    body = created.json()
+    due = datetime.fromisoformat(body["proposal_sla_due_at"])
+    received = datetime.fromisoformat(body["created_at"])
+    assert due - received == timedelta(hours=48)  # 15 -> Mode B
+
+    # Re-scoring recomputes it; clearing the scores clears it.
+    scores_24 = {k: "acute" if k == "D1" else v for k, v in SCORES_15.items()}  # still a valid full set
+    cleared = await client.patch(f"{DEALS_URL}/{body['id']}", json={"scores": None}, headers=headers)
+    assert cleared.json()["proposal_sla_due_at"] is None
+    rescored = await client.patch(f"{DEALS_URL}/{body['id']}", json={"scores": scores_24}, headers=headers)
+    assert rescored.json()["proposal_sla_due_at"] is not None
+
+
+async def test_proposal_status_sent_records_date_and_not_sent_clears_it(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_deal
+):
+    from datetime import date
+
+    rep, account, stage = await _deal_ctx(make_user, make_account, make_deal_stage, "prop-status")
+    deal = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=stage.id)
+    headers = auth_headers(rep)
+
+    sent = await client.patch(f"{DEALS_URL}/{deal.id}", json={"proposal_status": "proposal_sent"}, headers=headers)
+    assert sent.json()["proposal_status"] == "proposal_sent"
+    assert sent.json()["proposal_sent_at"] == date.today().isoformat()
+
+    backdated = await client.patch(
+        f"{DEALS_URL}/{deal.id}", json={"proposal_status": "proposal_sent", "proposal_sent_at": "2026-10-01"}, headers=headers
+    )
+    assert backdated.json()["proposal_sent_at"] == "2026-10-01"
+
+    resaved = await client.patch(f"{DEALS_URL}/{deal.id}", json={"proposal_status": "proposal_sent"}, headers=headers)
+    assert resaved.json()["proposal_sent_at"] == "2026-10-01"  # unchanged status keeps the original date
+
+    undone = await client.patch(f"{DEALS_URL}/{deal.id}", json={"proposal_status": "not_sent"}, headers=headers)
+    assert undone.json()["proposal_sent_at"] is None
+
+    bad = await client.patch(f"{DEALS_URL}/{deal.id}", json={"proposal_status": "maybe"}, headers=headers)
+    assert bad.status_code == 422
+
+
+async def _tracker_fixture(client, make_user, make_account, make_deal_stage, make_deal, make_contact, auth_headers, tag):
+    """A deal exercising every Lead Tracker export column."""
+    rep = await make_user(email=f"rep-trk-{tag}@example.com", role=UserRole.SALES_REP, first_name="Ram")
+    account = await make_account(
+        owner_id=rep.id, company=f"Arbis {tag}", source=LeadSource.REFERRAL, country="India",
+        engagement_type="retainer_monthly", industry="Finance",
+    )
+    stage = await make_deal_stage(name=f"Pre-Sales {tag}")
+    first = await make_contact(account_id=account.id, first_name="First", last_name="Linked",
+                               email=f"first-{tag}@example.com", job_title="Analyst")
+    primary = await make_contact(account_id=account.id, first_name="Radhika", last_name="R",
+                                 email=f"radhika-{tag}@example.com", phone="+1 800", job_title="Director",
+                                 is_primary=True, is_originator=True)
+    deal = await make_deal(account_id=account.id, owner_id=rep.id, stage_id=stage.id,
+                           deal_name=f"Tracker {tag}", contact_ids=[first.id, primary.id])
+    headers = auth_headers(rep)
+    await client.put(
+        f"/api/v1/accounts/{account.id}/source-detail",
+        json={"members": [{"type": "user", "id": rep.id}, {"type": "contact", "id": primary.id}]},
+        headers=headers,
+    )
+    await client.post(f"{DEALS_URL}/{deal.id}/activities", json={"type": "note", "note": "older note"}, headers=headers)
+    await client.post(f"{DEALS_URL}/{deal.id}/activities", json={"type": "call", "note": "latest call"}, headers=headers)
+    return rep, account, deal, headers
+
+
+async def test_list_export_fills_the_lead_tracker_columns(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_deal, make_contact
+):
+    import io
+
+    rep, account, deal, headers = await _tracker_fixture(
+        client, make_user, make_account, make_deal_stage, make_deal, make_contact, auth_headers, "list"
+    )
+
+    response = await client.get(DEALS_URL, params={"to_export": "true"}, headers=headers)
+
+    sheet = openpyxl.load_workbook(io.BytesIO(response.content)).active
+    header = [c.value for c in sheet[1]]
+    row = dict(zip(header, next(sheet.iter_rows(min_row=2, values_only=True)), strict=True))
+    assert row["ID"] == deal.id
+    assert row["Date Received"] is not None
+    assert row["Source"] == "Referral"
+    assert row["Source Detail"] == "Ram --> Radhika R"
+    assert row["Company Name"] == "Arbis list"
+    # Primary contact of the account (linked to the deal) wins over the first linked contact.
+    assert row["Contact Name"] == "Radhika R"
+    assert row["Designation"] == "Director"
+    assert row["Email"] == "radhika-list@example.com"
+    assert row["Phone/WhatsApp"] == "+1 800"
+    assert row["Stage"] == "Pre-Sales list"
+    assert row["Comment"] == "latest call"  # newest activity; stage moves are not comments
+    assert row["Industry/Vertical"] == "Finance"
+    assert row["Country/Region"] == "India"
+    assert row["Engagement Type"] == "Retainer — Monthly"
+    assert row["All Contacts"] == "First Linked, Radhika R"
+
+
+async def test_single_export_has_the_same_tracker_fields(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_deal, make_contact
+):
+    import io
+
+    rep, account, deal, headers = await _tracker_fixture(
+        client, make_user, make_account, make_deal_stage, make_deal, make_contact, auth_headers, "one"
+    )
+
+    response = await client.get(f"{DEALS_URL}/{deal.id}", params={"to_export": "true"}, headers=headers)
+
+    fields = dict(openpyxl.load_workbook(io.BytesIO(response.content))["Deal"].iter_rows(min_row=2, values_only=True))
+    assert list(fields)[: len(TRACKER_COLUMNS)] == TRACKER_COLUMNS
+    assert fields["Source Detail"] == "Ram --> Radhika R"
+    assert fields["Comment"] == "latest call"
+    assert fields["Contact Name"] == "Radhika R"
+
+
+async def test_export_contact_falls_back_to_first_linked_and_blank_when_none(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal_stage, make_deal, make_contact
+):
+    import io
+
+    rep = await make_user(email="rep-trk-fallback@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Fallback Co")
+    stage = await make_deal_stage(name="Fallback Stage")
+    a = await make_contact(account_id=account.id, first_name="Aaa", last_name="One", email="aaa-fb@example.com")
+    b = await make_contact(account_id=account.id, first_name="Bbb", last_name="Two", email="bbb-fb@example.com")
+    await make_deal(account_id=account.id, owner_id=rep.id, stage_id=stage.id, deal_name="Has contacts",
+                    contact_ids=[a.id, b.id])
+    await make_deal(account_id=account.id, owner_id=rep.id, stage_id=stage.id, deal_name="No contacts")
+
+    response = await client.get(DEALS_URL, params={"to_export": "true"}, headers=auth_headers(rep))
+
+    sheet = openpyxl.load_workbook(io.BytesIO(response.content)).active
+    header = [c.value for c in sheet[1]]
+    rows = {r[header.index("Deal Name")]: dict(zip(header, r, strict=True)) for r in sheet.iter_rows(min_row=2, values_only=True)}
+    assert rows["Has contacts"]["Contact Name"] == "Aaa One"
+    assert rows["Has contacts"]["Email"] == "aaa-fb@example.com"
+    assert rows["No contacts"]["Contact Name"] is None
+    assert rows["No contacts"]["Email"] is None
+    assert rows["No contacts"]["Comment"] is None
+    assert rows["No contacts"]["Source Detail"] is None
+
+
+async def test_list_export_is_styled_like_the_lead_tracker(
+    client: AsyncClient, make_user, auth_headers, make_account, make_deal
+):
+    import io
+
+    rep = await make_user(email="rep-export-style@example.com", role=UserRole.SALES_REP)
+    account = await make_account(owner_id=rep.id, company="Style Co")
+    await make_deal(account_id=account.id, owner_id=rep.id, deal_name="Styled")
+
+    response = await client.get(DEALS_URL, params={"to_export": "true"}, headers=auth_headers(rep))
+
+    sheet = openpyxl.load_workbook(io.BytesIO(response.content)).active
+    assert sheet["A1"].fill.fgColor.rgb.endswith("1B2A4A")
+    assert sheet["A1"].font.bold
+    assert sheet.freeze_panes == "B2"
+    assert sheet.auto_filter.ref == sheet.dimensions
+    assert sheet["B2"].number_format == "dd-mmm-yyyy"  # Date Received
+    assert sheet.column_dimensions["E"].width > 10  # sized to content

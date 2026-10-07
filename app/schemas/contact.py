@@ -22,6 +22,7 @@ class ContactCreate(BaseModel):
     alternate_phone: str | None = None
     job_title: str | None = None
     linkedin_url: str | None = None
+    is_originator: bool = False
 
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
     _validate_phone = field_validator("phone")(validate_phone)
@@ -36,10 +37,18 @@ class ContactUpdate(BaseModel):
     alternate_phone: str | None = None
     job_title: str | None = None
     linkedin_url: str | None = None
+    is_originator: bool | None = None
 
     _validate_linkedin_url = field_validator("linkedin_url")(validate_linkedin_url)
     _validate_phone = field_validator("phone")(validate_phone)
     _validate_alternate_phone = field_validator("alternate_phone")(validate_phone)
+
+    @field_validator("is_originator")
+    @classmethod
+    def _is_originator_not_null(cls, value: bool | None) -> bool | None:
+        if value is None:
+            raise ValueError("is_originator cannot be null")
+        return value
 
 
 class ContactRead(ORMBase):
@@ -52,6 +61,7 @@ class ContactRead(ORMBase):
     alternate_phone: str | None
     job_title: str | None
     linkedin_url: str | None
+    is_originator: bool
 
 
 class ContactOverviewRead(BaseModel):
@@ -82,6 +92,7 @@ class ContactOverviewRead(BaseModel):
     alternate_phone: str | None
     job_title: str | None
     linkedin_url: str | None
+    is_originator: bool
     is_primary: bool
     account_id: int | None
     account_name: str | None
@@ -110,6 +121,7 @@ class ContactListItemRead(BaseModel):
     email: str
     phone: str | None
     job_title: str | None
+    is_originator: bool
     is_primary: bool
     account_id: int | None
     account_name: str | None

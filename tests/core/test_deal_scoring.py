@@ -69,3 +69,17 @@ def test_score_summary_thresholds(total, mode, sla):
 
 def test_score_summary_is_none_when_unscored():
     assert score_summary(None) == (None, None)
+
+
+@pytest.mark.parametrize(
+    ("total", "hours"),
+    [(24, 24), (20, 24), (19, 48), (14, 48), (13, 72), (8, 72), (7, None), (1, None), (None, None)],
+)
+def test_proposal_sla_due_adds_the_mode_hours_to_the_received_time(total, hours):
+    from datetime import datetime, timedelta
+
+    from app.core.deal_scoring import proposal_sla_due
+
+    received = datetime(2026, 10, 1, 9, 30)
+    expected = received + timedelta(hours=hours) if hours else None
+    assert proposal_sla_due(received, total) == expected

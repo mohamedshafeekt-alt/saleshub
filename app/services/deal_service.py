@@ -5,17 +5,26 @@ logging, cold-reason enforcement (driven by the referenced DealStage's
 `is_cold` flag, plus a name check for Closed Lost specifically — see
 CLOSED_LOST_STAGE_NAME), and xlsx export rows."""
 
-from datetime import date, timedelta
-from typing import Any, Literal
+from datetime import UTC, date, datetime, timedelta
+from typing import Any, Literal, get_args
 
-from sqlalchemy import ColumnElement, delete, func, or_, select
+from sqlalchemy import ColumnElement, and_, case, delete, func, literal, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.deal_scoring import scoring_export_fields
+from app.core.account_options import ENGAGEMENT_TYPES, SOURCE_LABELS
+from app.core.deal_scoring import (
+    MODE_A_MIN,
+    SCORING_DIMENSIONS,
+    proposal_sla_due,
+    scoring_export_fields,
+    total_score,
+)
 from app.core.permission_codes import DEALS_NOTIFY_ON_CREATE, DEALS_VIEW_ALL
 from app.models.account import Account
 from app.models.contact import Contact
+from app.models.contact_account import ContactAccount
 from app.models.deal import Deal
+from app.models.deal_activity import DealActivity
 from app.models.deal_contact import DealContact
 from app.models.deal_stage import CLOSED_LOST_STAGE_NAME, DealStage, is_terminal_stage
 from app.models.deal_stage_history import DealStageHistory, entered_current_stage_in
@@ -24,8 +33,10 @@ from app.models.permission import Permission
 from app.models.role import Role
 from app.models.role_permission import role_permissions
 from app.models.user import User
+from app.schemas.account_source import SourcePersonRef, SourcePersonRead
 from app.schemas.deal import DealCreate, DealUpdate
 from app.services.account_service import AccountNotFoundError, get_account
+from app.services.account_source_service import list_people, source_chain_by_account
 from app.services.audit_service import log_audit
 from app.services.contact_service import ContactNotFoundError, contact_exists
 from app.services.notification_service import create_notification
@@ -41,6 +52,9 @@ DateField = Literal["created_at", "closed_at"]
 # indistinguishable from open stages in the API -- a client filtering by
 # stage_id would have to hardcode those two names itself.
 StageState = Literal["all", "open", "closed"]
+# The dashboard deal tiles; each is "open deals" narrowed by one rule, shared
+# by the tile count and its drill-down list (see _quick_filter_predicate).
+QuickFilter = Literal["in_view", "very_high", "overdue", "due_today", "past_sla"]
 
 _SORT_COLUMNS: dict[str, ColumnElement[Any]] = {
     "value": Deal.value.expression,
@@ -59,6 +73,10 @@ class DealAccessForbiddenError(Exception):
 
 class ColdReasonRequiredError(Exception):
     """Raised when a deal's stage is cold (DealStage.is_cold) or Closed Lost, without a cold_reason."""
+
+
+class InvalidOriginatorError(Exception):
+    """Raised when a deal's originator isn't an active User or an is_originator Contact."""
 
 
 class DealStageNotFoundError(Exception):
@@ -80,6 +98,33 @@ async def _assert_contacts_exist(db: AsyncSession, contact_ids: list[int]) -> No
     missing = set(contact_ids) - found
     if missing:
         raise ContactNotFoundError(f"Contact not found: {sorted(missing)}")
+
+
+async def _originator_columns(db: AsyncSession, ref: SourcePersonRef | None) -> dict[str, int | None]:
+    """Deal column values for an originator ref (None clears both). Users must
+    be active; Contacts must be flagged is_originator."""
+    if ref is None:
+        return {"originator_user_id": None, "originator_contact_id": None}
+    if ref.type == "user":
+        ok = await db.scalar(
+            select(User.id).where(User.id == ref.id, User.is_active.is_(True), User.is_delete.is_(False))
+        )
+        if ok is None:
+            raise InvalidOriginatorError(f"Unknown user: {ref.id}")
+        return {"originator_user_id": ref.id, "originator_contact_id": None}
+    ok = await db.scalar(
+        select(Contact.id).where(
+            Contact.id == ref.id, Contact.is_originator.is_(True), Contact.is_delete.is_(False)
+        )
+    )
+    if ok is None:
+        raise InvalidOriginatorError(f"Contact {ref.id} does not exist or is not marked as an originator")
+    return {"originator_user_id": None, "originator_contact_id": ref.id}
+
+
+async def list_originator_options(db: AsyncSession) -> list[SourcePersonRead]:
+    """Everyone selectable as a deal's Originator: users + is_originator contacts."""
+    return await list_people(db, originator_contacts_only=True)
 
 
 async def _set_deal_contacts(db: AsyncSession, deal_id: int, contact_ids: list[int]) -> None:
@@ -134,10 +179,14 @@ async def create_deal(db: AsyncSession, data: DealCreate, requester: User) -> De
 
     await _assert_contacts_exist(db, data.contact_ids)
 
-    deal_fields = data.model_dump(exclude={"contact_ids"})
+    originator_cols = await _originator_columns(db, data.originator)
+    deal_fields = data.model_dump(exclude={"contact_ids", "originator"}) | originator_cols
     deal = Deal(**deal_fields)
     db.add(deal)
     await db.flush()
+    # created_at is a server default -- load it to date the proposal SLA.
+    await db.refresh(deal, attribute_names=["created_at"])
+    deal.proposal_sla_due_at = proposal_sla_due(deal.created_at, total_score(deal.scores))
 
     for contact_id in data.contact_ids:
         db.add(DealContact(deal_id=deal.id, contact_id=contact_id))
@@ -184,7 +233,9 @@ async def create_deal(db: AsyncSession, data: DealCreate, requester: User) -> De
     # it accidentally works instead depends on those rows still being
     # strongly referenced elsewhere in the session (e.g. the account/stage
     # lookups above going out of scope) -- not something to rely on.
-    await db.refresh(deal, attribute_names=["account", "stage", "owner"])
+    await db.refresh(
+        deal, attribute_names=["account", "stage", "owner", "originator_user", "originator_contact"]
+    )
     return deal
 
 
@@ -200,6 +251,7 @@ def _deal_filters(
     date_to: date | None = None,
     date_field: DateField = "created_at",
     stage_state: StageState = "all",
+    quick_filter: QuickFilter | None = None,
 ) -> tuple[list[Any], int | None, bool]:
     if DEALS_VIEW_ALL not in requester.permission_codes:
         owner_id = requester.id
@@ -250,12 +302,59 @@ def _deal_filters(
             # the caller asked for and split the two endpoints' counts.
             filters.append(Deal.created_at < date_to + timedelta(days=1))
 
+    if quick_filter is not None:
+        filters.append(_quick_filter_predicate(quick_filter))
+
     needs_account_join = search is not None
     if search is not None:
         pattern = f"%{search}%"
         filters.append(or_(Deal.deal_name.ilike(pattern), Account.company.ilike(pattern)))
 
     return filters, owner_id, needs_account_join
+
+
+def _total_score_sql() -> ColumnElement[Any]:
+    """SQL twin of deal_scoring.total_score, built from SCORING_DIMENSIONS so
+    adding/removing a level there changes this too."""
+    return sum(
+        (
+            case(
+                *[(Deal.scores[dim].astext == level, pts) for level, (_label, pts) in spec["levels"].items()],
+                else_=0,
+            )
+            for dim, spec in SCORING_DIMENSIONS.items()
+        ),
+        literal(0),
+    )
+
+
+def _quick_filter_predicate(quick_filter: QuickFilter) -> ColumnElement[bool]:
+    """Open deals narrowed by the tile's rule. "Open" is the same
+    not-a-terminal-stage test as stage_state="open"."""
+    open_ = ~Deal.stage.has(is_terminal_stage())
+    today = date.today()
+    if quick_filter == "very_high":
+        return and_(open_, Deal.scores.is_not(None), _total_score_sql() >= MODE_A_MIN)
+    if quick_filter == "overdue":
+        return and_(open_, Deal.follow_up_date < today)
+    if quick_filter == "due_today":
+        return and_(open_, Deal.follow_up_date == today)
+    if quick_filter == "past_sla":
+        now = datetime.now(UTC).replace(tzinfo=None)  # created_at & co. are naive UTC
+        return and_(open_, Deal.proposal_sla_due_at < now, Deal.proposal_status != "proposal_sent")
+    return open_
+
+
+async def count_quick_filters(db: AsyncSession, *, requester: User) -> dict[str, int]:
+    """Deal counts for every QuickFilter, scoped to what `requester` may see."""
+    counts = {}
+    for quick_filter in get_args(QuickFilter):
+        filters, _owner, _join = _deal_filters(
+            requester=requester, owner_id=None, account_id=None, stage_id=None, tier=None,
+            search=None, quick_filter=quick_filter,
+        )
+        counts[quick_filter] = await db.scalar(select(func.count(Deal.id)).where(*filters)) or 0
+    return counts
 
 
 def _order_by(sort_by: SortBy, sort_dir: SortDir) -> ColumnElement[Any]:
@@ -276,6 +375,7 @@ async def list_deals(
     date_to: date | None = None,
     date_field: DateField = "created_at",
     stage_state: StageState = "all",
+    quick_filter: QuickFilter | None = None,
     sort_by: SortBy = "created_at",
     sort_dir: SortDir = "desc",
     limit: int = 20,
@@ -292,6 +392,7 @@ async def list_deals(
         date_to=date_to,
         date_field=date_field,
         stage_state=stage_state,
+        quick_filter=quick_filter,
     )
 
     count_query = select(func.count(Deal.id))
@@ -320,6 +421,7 @@ async def list_deals_board(
     tier: list[LeadTier] | None = None,
     search: str | None = None,
     stage_state: StageState = "all",
+    quick_filter: QuickFilter | None = None,
     sort_by: SortBy = "created_at",
     sort_dir: SortDir = "desc",
 ) -> list[tuple[DealStage, list[Deal]]]:
@@ -337,6 +439,7 @@ async def list_deals_board(
         tier=tier,
         search=search,
         stage_state=stage_state,
+        quick_filter=quick_filter,
     )
 
     query = select(Deal)
@@ -378,7 +481,18 @@ async def get_deal(db: AsyncSession, deal_id: int, requester: User) -> Deal:
 async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requester: User) -> Deal:
     deal = await _get_deal_or_raise(db, deal_id, requester)
 
-    updates = data.model_dump(exclude_unset=True, exclude={"note", "contact_ids"})
+    updates = data.model_dump(exclude_unset=True, exclude={"note", "contact_ids", "originator"})
+    originator_set = "originator" in data.model_fields_set
+    if originator_set:
+        updates |= await _originator_columns(db, data.originator)
+    if updates.get("proposal_status") is None:
+        updates.pop("proposal_status", None)  # not nullable: ignore an explicit null
+    status_ = updates.get("proposal_status")
+    if status_ == "proposal_sent":
+        # Re-saving an already-sent deal keeps its original sent date.
+        updates["proposal_sent_at"] = updates.get("proposal_sent_at") or deal.proposal_sent_at or date.today()
+    elif status_ == "not_sent":
+        updates["proposal_sent_at"] = None
     contact_ids_set = "contact_ids" in data.model_fields_set
 
     if "account_id" in updates:
@@ -395,6 +509,8 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
 
     for field, value in updates.items():
         setattr(deal, field, value)
+    if "scores" in updates:
+        deal.proposal_sla_due_at = proposal_sla_due(deal.created_at, total_score(deal.scores))
 
     if contact_ids_set:
         await _set_deal_contacts(db, deal.id, data.contact_ids or [])
@@ -443,6 +559,8 @@ async def update_deal(db: AsyncSession, deal_id: int, data: DealUpdate, requeste
     # reassignment.
     fk_to_relationship = {"account_id": "account", "stage_id": "stage", "owner_id": "owner"}
     changed_relationships = [rel for fk, rel in fk_to_relationship.items() if fk in updates]
+    if originator_set:
+        changed_relationships += ["originator_user", "originator_contact"]
     if changed_relationships:
         await db.refresh(deal, attribute_names=changed_relationships)
     return deal
@@ -493,6 +611,93 @@ async def list_deals_for_contact(db: AsyncSession, contact_id: int) -> list[Deal
     return list(result.scalars().all())
 
 
+# Lead Tracker sheet columns first, then this app's own deal columns, then
+# scoring (appended from deal_scoring). Shared by the list and single-deal exports.
+EXPORT_COLUMNS = [
+    "ID", "Date Received", "Source", "Source Detail", "Company Name", "Contact Name", "Designation",
+    "Stage", "Comment", "Email", "Phone/WhatsApp", "Industry/Vertical", "Country/Region", "Engagement Type",
+    "Deal Name", "All Contacts", "Value", "Currency", "Tier", "Owner", "Expected Close Date", "Cold Reason",
+    "Follow-up Date", "Originator", "Proposal Status", "Proposal Sent Date", "Proposal SLA Due Date",
+]
+EXPORT_HEADERS = [*EXPORT_COLUMNS, *scoring_export_fields(None)]
+
+
+async def deal_export_rows(db: AsyncSession, deals: list[Deal]) -> list[dict[str, Any]]:
+    """One ordered {column: value} dict per deal, keyed by EXPORT_HEADERS."""
+    deal_ids = [d.id for d in deals]
+    contacts_by_deal = await get_deal_contact_ids_by_deal(db, deal_ids)
+    chains = await source_chain_by_account(db, list({d.account_id for d in deals}))
+
+    # Contact name/designation/email/phone: the account's primary contact if
+    # linked to the deal, else the first linked one.
+    primary_pairs = set()
+    if deal_ids:
+        primary_pairs = set((await db.execute(
+            select(DealContact.deal_id, DealContact.contact_id)
+            .join(Deal, Deal.id == DealContact.deal_id)
+            .join(
+                ContactAccount,
+                (ContactAccount.contact_id == DealContact.contact_id) & (ContactAccount.account_id == Deal.account_id),
+            )
+            .where(DealContact.deal_id.in_(deal_ids), ContactAccount.is_primary.is_(True))
+        )).all())
+    contact_ids = {cid for links in contacts_by_deal.values() for cid, *_ in links}
+    contact_rows = {
+        c.id: c for c in (await db.execute(select(Contact).where(Contact.id.in_(contact_ids)))).scalars()
+    } if contact_ids else {}
+
+    latest_comment: dict[int, str] = {}
+    if deal_ids:
+        latest_comment = {
+            deal_id: note
+            for deal_id, note in (await db.execute(
+                select(DealActivity.deal_id, DealActivity.note)
+                .where(DealActivity.deal_id.in_(deal_ids))
+                .distinct(DealActivity.deal_id)
+                .order_by(DealActivity.deal_id, DealActivity.created_at.desc(), DealActivity.id.desc())
+            )).all()
+        }
+
+    rows = []
+    for deal in deals:
+        links = contacts_by_deal.get(deal.id, [])
+        chosen = next((cid for cid, *_ in links if (deal.id, cid) in primary_pairs), links[0][0] if links else None)
+        contact = contact_rows.get(chosen) if chosen is not None else None
+        account = deal.account
+        originator = deal.originator
+        values: dict[str, Any] = {
+            "ID": deal.id,
+            "Date Received": deal.created_at.date(),
+            "Source": SOURCE_LABELS.get(account.source.value) if account.source else None,
+            "Source Detail": chains.get(deal.account_id),
+            "Company Name": account.company,
+            "Contact Name": " ".join(filter(None, [contact.first_name, contact.last_name])) if contact else None,
+            "Designation": contact.job_title if contact else None,
+            "Stage": deal.stage.name,
+            "Comment": latest_comment.get(deal.id),
+            "Email": contact.email if contact else None,
+            "Phone/WhatsApp": contact.phone if contact else None,
+            "Industry/Vertical": account.industry,
+            "Country/Region": account.country,
+            "Engagement Type": ENGAGEMENT_TYPES.get(account.engagement_type) if account.engagement_type else None,
+            "Deal Name": deal.deal_name,
+            "All Contacts": ", ".join(name for _cid, name, _email, _phone in links) or None,
+            "Value": deal.value,
+            "Currency": deal.currency,
+            "Tier": deal.tier.value if deal.tier is not None else None,
+            "Owner": deal.owner_name,
+            "Expected Close Date": deal.expected_close_date,
+            "Cold Reason": deal.cold_reason,
+            "Follow-up Date": deal.follow_up_date,
+            "Originator": originator["name"] if originator else None,
+            "Proposal Status": "Proposal Sent" if deal.proposal_status == "proposal_sent" else "Not Sent",
+            "Proposal Sent Date": deal.proposal_sent_at,
+            "Proposal SLA Due Date": deal.proposal_sla_due_at,
+        }
+        rows.append({column: values[column] for column in EXPORT_COLUMNS} | scoring_export_fields(deal.scores))
+    return rows
+
+
 async def export_deals(
     db: AsyncSession,
     *,
@@ -505,9 +710,11 @@ async def export_deals(
     date_to: date | None = None,
     date_field: DateField = "created_at",
     stage_state: StageState = "all",
+    quick_filter: QuickFilter | None = None,
 ) -> list[dict[str, Any]]:
     """All deals matching the requester's role-scoping, ignoring any
-    account_id filter (export is always cross-account). No pagination."""
+    account_id filter (export is always cross-account). No pagination. Rows
+    are keyed by EXPORT_HEADERS."""
     filters, _owner_id, _needs_join = _deal_filters(
         requester=requester,
         owner_id=owner_id,
@@ -519,50 +726,13 @@ async def export_deals(
         date_to=date_to,
         date_field=date_field,
         stage_state=stage_state,
+        quick_filter=quick_filter,
     )
-
-    owner_name = func.trim(
-        func.concat(func.coalesce(User.first_name, ""), " ", func.coalesce(User.last_name, ""))
-    )
-
     query = (
-        select(
-            Deal.id,
-            Deal.deal_name,
-            Account.company,
-            Deal.value,
-            Deal.currency,
-            DealStage.name,
-            Deal.tier,
-            owner_name,
-            Deal.expected_close_date,
-            Deal.cold_reason,
-            Deal.scores,
-        )
+        select(Deal)
         .join(Account, Deal.account_id == Account.id)
-        .join(DealStage, Deal.stage_id == DealStage.id)
-        .join(User, Deal.owner_id == User.id)
         .where(*filters)
         .order_by(Deal.created_at.desc())
     )
-
-    rows = (await db.execute(query)).all()
-    deal_ids = [row[0] for row in rows]
-    contacts_by_deal = await get_deal_contact_ids_by_deal(db, deal_ids)
-
-    return [
-        {
-            "deal_name": row[1],
-            "account": row[2],
-            "contact": ", ".join(name for _cid, name, _email, _phone in contacts_by_deal.get(row[0], [])) or None,
-            "value": row[3],
-            "currency": row[4],
-            "stage": row[5],
-            "tier": row[6].value if row[6] is not None else None,
-            "owner": row[7],
-            "expected_close_date": row[8],
-            "cold_reason": row[9],
-            "scoring": scoring_export_fields(row[10]),
-        }
-        for row in rows
-    ]
+    deals = list((await db.execute(query)).unique().scalars().all())
+    return await deal_export_rows(db, deals)

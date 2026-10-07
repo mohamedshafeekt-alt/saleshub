@@ -1049,7 +1049,7 @@ async def test_export_deals_returns_rows_spanning_all_accounts(
 
     rows = await export_deals(db_session, requester=owner)
 
-    names = {row["deal_name"] for row in rows}
+    names = {row["Deal Name"] for row in rows}
     assert {deal_a.deal_name, deal_b.deal_name} <= names
 
 
@@ -1064,7 +1064,7 @@ async def test_export_deals_scopes_to_requester_when_not_view_all(
 
     rows = await export_deals(db_session, requester=rep_a)
 
-    assert [row["deal_name"] for row in rows] == [own_deal.deal_name]
+    assert [row["Deal Name"] for row in rows] == [own_deal.deal_name]
 
 
 async def test_export_deals_includes_expected_columns(
@@ -1086,13 +1086,14 @@ async def test_export_deals_includes_expected_columns(
 
     rows = await export_deals(db_session, requester=owner)
 
-    row = next(r for r in rows if r["deal_name"] == deal.deal_name)
-    assert row["account"] == account.company
-    assert row["contact"] == "Cara Contact, Dara Contact"
-    assert row["value"] == 500.0
-    assert row["currency"] == "EUR"
-    assert row["tier"] == "gold"
-    assert row["owner"] == owner.first_name
+    row = next(r for r in rows if r["Deal Name"] == deal.deal_name)
+    assert row["Company Name"] == account.company
+    assert row["All Contacts"] == "Cara Contact, Dara Contact"
+    assert row["Contact Name"] == "Cara Contact"
+    assert row["Value"] == 500.0
+    assert row["Currency"] == "EUR"
+    assert row["Tier"] == "gold"
+    assert row["Owner"] == owner.first_name
 
 
 async def test_export_deals_contact_is_none_when_no_contacts(
@@ -1104,8 +1105,9 @@ async def test_export_deals_contact_is_none_when_no_contacts(
 
     rows = await export_deals(db_session, requester=owner)
 
-    row = next(r for r in rows if r["deal_name"] == deal.deal_name)
-    assert row["contact"] is None
+    row = next(r for r in rows if r["Deal Name"] == deal.deal_name)
+    assert row["All Contacts"] is None
+    assert row["Contact Name"] is None
 
 
 async def test_create_deal_writes_audit_log(db_session, make_user, make_account, make_deal_stage):

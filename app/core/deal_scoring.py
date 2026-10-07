@@ -6,6 +6,8 @@ adding/removing a dimension or level here is the whole change. Scores stay
 server-side -- the UI only ever sees level keys/labels.
 """
 
+from datetime import datetime, timedelta
+
 # {dimension_key: {"label": ..., "levels": {level_key: (label, score)}}}
 SCORING_DIMENSIONS: dict[str, dict] = {
     "D1": {
@@ -111,14 +113,17 @@ SCORING_DESCRIPTIONS: dict[str, dict[str, str]] = {
     },
 }
 
-# (minimum total, Response Mode, Proposal SLA), highest band first -- the
-# Lead Tracker's TOTAL SCORE -> RESPONSE MODE / PROPOSAL SLA formulas.
+# (minimum total, Response Mode, Proposal SLA, SLA hours), highest band first
+# -- the Lead Tracker's TOTAL SCORE -> RESPONSE MODE / PROPOSAL SLA formulas.
+# Mode D has no proposal due, so no hours.
 _BANDS = [
-    (20, "Mode A — Strike Now", "24 Hours"),
-    (14, "Mode B — Build Case", "48 Hrs + Discovery"),
-    (8, "Mode C — Qualify First", "72 Hrs — Qualify Call"),
-    (1, "Mode D — Nurture", "No Proposal Yet"),
+    (20, "Mode A — Strike Now", "24 Hours", 24),
+    (14, "Mode B — Build Case", "48 Hrs + Discovery", 48),
+    (8, "Mode C — Qualify First", "72 Hrs — Qualify Call", 72),
+    (1, "Mode D — Nurture", "No Proposal Yet", None),
 ]
+
+MODE_A_MIN = _BANDS[0][0]  # "Very high": Mode A, 20+
 
 
 def total_score(scores: dict[str, str] | None) -> int | None:
@@ -135,10 +140,19 @@ def total_score(scores: dict[str, str] | None) -> int | None:
 
 def score_summary(total: int | None) -> tuple[str | None, str | None]:
     """(Response Mode, Proposal SLA) for a total score."""
-    for minimum, mode, sla in _BANDS:
+    for minimum, mode, sla, _hours in _BANDS:
         if total is not None and total >= minimum:
             return mode, sla
     return None, None
+
+
+def proposal_sla_due(received_at: datetime, total: int | None) -> datetime | None:
+    """When the proposal is due: received time + the band's SLA hours. None
+    when unscored or in Mode D (no proposal owed)."""
+    for minimum, _mode, _sla, hours in _BANDS:
+        if total is not None and total >= minimum:
+            return received_at + timedelta(hours=hours) if hours else None
+    return None
 
 
 def validate_scores(scores: dict[str, str] | None) -> dict[str, str] | None:
