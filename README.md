@@ -119,6 +119,7 @@ read/unread, mark-all/bulk-read, bulk soft-delete) — populated on new-lead cre
 - [x] Deal Priority — `priority` on every deal response (`Very High` / `High` / `Medium` / `Low` for Mode A / B / C / D, `null` when unscored), from the same score bands as Response Mode (`app.core.deal_scoring.priority`); also a "Priority" column in both deal xlsx exports
 - [x] Lead → Account conversion now carries the lead's `source` onto the new Account (it was dropped before); migration `e2c5a7b9d4f6` backfills `source` on already-converted accounts that still have none, from their `source_lead_id` lead
 - [x] `GET /api/v1/deals/scoring-dimensions` levels now include their `score` (1–3 points) — reverses the earlier "scores stay server-side" choice because the deal page's Qualification card shows each dimension's points (totals/mode/priority are still computed only server-side)
+- [x] Google Cloud Storage support alongside S3 (`google-cloud-storage`, `app/services/gcs_storage_service.py`) — the backend is picked by which credentials are in `APP_CONFIG`: `gcs_bucket_name` + `gcs_credentials` (service-account key JSON, inlined) → GCS; else `s3_bucket_name` + AWS keys → S3; else local disk. `storage_backend` is gone. Reads on either cloud are 15-minute signed URLs; object keys keep the same `{prefix}/{stem}{ext}` shape
 - [ ] Static Pre-Sales Checklist per deal
 
 ## Milestones (per Phase 1 kickoff)

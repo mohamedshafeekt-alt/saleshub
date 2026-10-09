@@ -1,6 +1,5 @@
 import json
 import os
-from typing import Literal
 
 from dotenv import load_dotenv
 from pydantic import model_validator
@@ -29,11 +28,14 @@ class Settings(BaseSettings):
     smtp_from_address: str
     log_level: str = "INFO"
     frontend_base_url: str = "http://localhost:40843"
-    storage_backend: Literal["local", "s3"] = "local"
+    # Object storage is picked by which credentials are present: GCS first,
+    # then S3, else local disk (see app/services/storage.py).
     aws_region: str = ""
     s3_bucket_name: str = ""
     aws_access_key_id: str = ""
     aws_secret_access_key: str = ""
+    gcs_bucket_name: str = ""
+    gcs_credentials: dict[str, str] = {}  # service-account key JSON, inlined
 
     @model_validator(mode="after")
     def _build_database_url(self) -> "Settings":
