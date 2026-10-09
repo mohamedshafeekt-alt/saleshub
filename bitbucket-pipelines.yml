@@ -1,0 +1,34 @@
+image: atlassian/default-image:4
+
+definitions:
+  services:
+    docker:
+      memory: 2048
+
+pipelines:
+
+  branches:
+
+    prod:
+
+      - step:
+          name: Build and Deploy API PROD
+
+          services:
+            - docker
+
+          caches:
+            - docker
+
+          script:
+
+            # =====================================================
+            # Variables
+            # VM details + app config come from Bitbucket repository
+            # variables: SSH_HOST, SSH_USER, SSH_PRIVATE_KEY_BASE64,
+            # SSH_KNOWN_HOSTS, HEALTH_URL, CONFIG
+            # =====================================================
+            - export IMAGE_NAME=sales-crm-api
+            - export CONTAINER_NAME=sales-crm-api
+
+            - bash deploy.sh
