@@ -16,13 +16,14 @@ from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from app.core.config import settings
 from app.db.base import Base
 from app.services import account_document_service, deal_document_service, user_service
 from app.services.file_upload_service import FileUploadService
 
 # Real infra safety net: whatever storage_backend the running environment's
-# .env has configured, tests must never touch real S3 unless they explicitly
-# mock boto3 (see tests/services/test_s3_storage_service.py). Each of these
+# .env has configured, tests must never touch real S3/GCS unless they explicitly
+# mock the client (see tests/services/test_{s3,gcs}_storage_service.py). Each of these
 # module-level singletons is bound once at import time from settings, so it
 # has to be re-pinned to a local instance per test rather than toggled via
 # settings after the fact.
@@ -61,6 +62,10 @@ def _force_local_storage_backends(monkeypatch):
         monkeypatch.setattr(
             module, attr_name, FileUploadService(base_dir=base_dir, allowed_content_types=allowed_content_types)
         )
+    # resolve_file_url() picks GCS whenever GCS creds are set; clear them so
+    # tests that mock boto3 get the S3 path regardless of the local .env.
+    monkeypatch.setattr(settings, "gcs_bucket_name", "")
+    monkeypatch.setattr(settings, "gcs_credentials", {})
 
 TEST_DATABASE_URL = os.environ.get(
     "TEST_DATABASE_URL",
