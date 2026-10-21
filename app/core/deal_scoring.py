@@ -116,12 +116,12 @@ SCORING_DESCRIPTIONS: dict[str, dict[str, str]] = {
 
 # (minimum total, Response Mode, Proposal SLA, SLA hours, Priority), highest
 # band first -- the Lead Tracker's TOTAL SCORE -> RESPONSE MODE / PROPOSAL SLA
-# formulas. Mode D has no proposal due, so no hours.
+# formulas. The sheet's Mode D (1–7) is left out: every dimension scores at
+# least 1, so the lowest possible total is 8.
 _BANDS = [
     (20, "Mode A — Strike Now", "24 Hours", 24, "Very High"),
     (14, "Mode B — Build Case", "48 Hrs + Discovery", 48, "High"),
     (8, "Mode C — Qualify First", "72 Hrs — Qualify Call", 72, "Medium"),
-    (1, "Mode D — Nurture", "No Proposal Yet", None, "Low"),
 ]
 
 MODE_A_MIN = _BANDS[0][0]  # "Very high": Mode A, 20+
@@ -148,7 +148,7 @@ def score_summary(total: int | None) -> tuple[str | None, str | None]:
 
 
 def priority(total: int | None) -> str | None:
-    """Very High / High / Medium / Low for Mode A / B / C / D; None when unscored."""
+    """Very High / High / Medium for Mode A / B / C; None when unscored."""
     for minimum, _mode, _sla, _hours, label in _BANDS:
         if total is not None and total >= minimum:
             return label
@@ -157,10 +157,10 @@ def priority(total: int | None) -> str | None:
 
 def proposal_sla_due(received_at: datetime, total: int | None) -> datetime | None:
     """When the proposal is due: received time + the band's SLA hours. None
-    when unscored or in Mode D (no proposal owed)."""
+    when unscored."""
     for minimum, _mode, _sla, hours, _priority in _BANDS:
         if total is not None and total >= minimum:
-            return received_at + timedelta(hours=hours) if hours else None
+            return received_at + timedelta(hours=hours)
     return None
 
 
