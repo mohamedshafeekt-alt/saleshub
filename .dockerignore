@@ -1,0 +1,35 @@
+# OS / editor / agent
+.DS_Store
+.idea/
+.vscode/
+.claude/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+*.egg-info/
+
+# Local data / logs
+media/
+*.log
+*.db
+*.sqlite*
+
+# Env files — never bake secrets into the image
+.env
+.env.*
+
+# Not needed at runtime
+tests/
+test.py
+docs/
+
+# Git / docker meta
+.git/
+.gitignore
+Dockerfile
+.dockerignore
