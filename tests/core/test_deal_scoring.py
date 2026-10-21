@@ -60,8 +60,7 @@ def test_total_score_ignores_a_dimension_removed_from_the_backend():
         (14, "Mode B — Build Case", "48 Hrs + Discovery"),
         (13, "Mode C — Qualify First", "72 Hrs — Qualify Call"),
         (8, "Mode C — Qualify First", "72 Hrs — Qualify Call"),
-        (7, "Mode D — Nurture", "No Proposal Yet"),
-        (1, "Mode D — Nurture", "No Proposal Yet"),
+        (7, None, None),
     ],
 )
 def test_score_summary_thresholds(total, mode, sla):
@@ -71,10 +70,10 @@ def test_score_summary_thresholds(total, mode, sla):
 @pytest.mark.parametrize(
     ("total", "expected"),
     [(24, "Very High"), (20, "Very High"), (19, "High"), (14, "High"), (13, "Medium"), (8, "Medium"),
-     (7, "Low"), (1, "Low"), (None, None)],
+     (7, None), (None, None)],
 )
 def test_priority_follows_the_response_mode_band(total, expected):
-    """Mode A -> Very High, B -> High, C -> Medium, D -> Low; unscored -> None."""
+    """Mode A -> Very High, B -> High, C -> Medium; unscored -> None."""
     assert priority(total) == expected
 
 
@@ -84,7 +83,7 @@ def test_score_summary_is_none_when_unscored():
 
 @pytest.mark.parametrize(
     ("total", "hours"),
-    [(24, 24), (20, 24), (19, 48), (14, 48), (13, 72), (8, 72), (7, None), (1, None), (None, None)],
+    [(24, 24), (20, 24), (19, 48), (14, 48), (13, 72), (8, 72), (7, None), (None, None)],
 )
 def test_proposal_sla_due_adds_the_mode_hours_to_the_received_time(total, hours):
     from datetime import datetime, timedelta
