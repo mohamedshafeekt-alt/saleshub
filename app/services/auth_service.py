@@ -1,7 +1,7 @@
 """Session lifecycle: issue an access+refresh token pair at login, exchange a
 refresh token for a new access token, and revoke a refresh token on logout."""
 
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
@@ -149,7 +149,9 @@ async def reset_password(db: AsyncSession, token: str, new_password: str) -> Non
         raise InvalidResetTokenError("Invalid or expired reset token")
 
     user.hashed_password = hash_password(new_password)
-    user.password_changed_at = _now_ist()
+    # Naive UTC, not IST: rbac_middleware compares it against the JWT "iat"
+    # (UTC). IST here rejects every new token for 5.5h after a reset.
+    user.password_changed_at = datetime.now(UTC).replace(tzinfo=None)
     stored.used_at = _now_ist()
     await revoke_all_refresh_tokens(db, user)
     await log_audit(

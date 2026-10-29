@@ -196,6 +196,22 @@ async def test_reset_password_with_valid_token_returns_204_and_allows_login_with
     assert login_response.status_code == 200
 
 
+async def test_token_issued_right_after_reset_password_is_accepted(
+    client: AsyncClient, make_user, fake_email_sender
+):
+    """Logging in just after a reset must yield a usable token -- the
+    "issued before the password change" check must compare like with like."""
+    await make_user(email="reset-me@example.com", password="old-password", role=UserRole.SALES_REP)
+    await client.post(FORGOT_PASSWORD_URL, json={"email": "reset-me@example.com"})
+    reset_token = fake_email_sender.calls[0]["body"].split("?token=")[1].split("\n")[0]
+    await client.post(RESET_PASSWORD_URL, json={"token": reset_token, "new_password": "new-password"})
+
+    login = await client.post(LOGIN_URL, json={"email": "reset-me@example.com", "password": "new-password"})
+    me = await client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {login.json()['access_token']}"})
+
+    assert me.status_code == 200
+
+
 async def test_reset_password_with_unknown_token_returns_400(client: AsyncClient):
     response = await client.post(
         RESET_PASSWORD_URL, json={"token": "not-a-real-token", "new_password": "whatever"}

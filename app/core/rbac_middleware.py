@@ -55,7 +55,9 @@ async def enforce_rbac(request: Request, db: AsyncSession = Depends(get_db)) -> 
 
     if user.password_changed_at is not None and "iat" in payload:
         issued_at = datetime.fromtimestamp(payload["iat"], tz=UTC).replace(tzinfo=None)
-        if issued_at < user.password_changed_at:
+        # "iat" is whole seconds; drop the microseconds so a token issued in the
+        # same second as the change isn't treated as older than it.
+        if issued_at < user.password_changed_at.replace(microsecond=0):
             raise _UNAUTHENTICATED
 
     required = getattr(endpoint, "__required_permissions__", None)
